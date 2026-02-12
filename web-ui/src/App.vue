@@ -6,17 +6,36 @@ const graphData = ref({ nodes: [], relationships: [] })
 const timelineEvents = ref([])
 const currentTimeIndex = ref(0)
 const selectedNode = ref(null)
+const selectedRelationship = ref(null)
 const cy = ref(null)
 const isPlaying = ref(false)
 const playbackSpeed = ref(1)
 const playbackInterval = ref(null)
+const isLoaded = ref(false)
 
 const currentTimeDisplay = computed(() => {
   if (timelineEvents.value.length === 0) return 'No data'
   const event = timelineEvents.value[currentTimeIndex.value]
   if (!event) return 'Loading...'
   const date = new Date(event.timestamp)
-  return date.toLocaleTimeString()
+  return date.toLocaleString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  })
+})
+
+const currentDateDisplay = computed(() => {
+  if (timelineEvents.value.length === 0) return ''
+  const event = timelineEvents.value[currentTimeIndex.value]
+  if (!event) return ''
+  const date = new Date(event.timestamp)
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  })
 })
 
 const selectedNodeRelationships = computed(() => {
@@ -45,6 +64,9 @@ onMounted(async () => {
   await loadTimeline()
   await loadGraph()
   initCytoscape()
+  setTimeout(() => {
+    isLoaded.value = true
+  }, 100)
 })
 
 async function loadTimeline() {
@@ -59,8 +81,6 @@ async function loadGraph() {
     currentTimeIndex.value = timelineEvents.value.length - 1
   }
 
-  // If we're at the very end of the timeline, show the current state
-  // Otherwise, query at the specific event timestamp
   if (currentTimeIndex.value === timelineEvents.value.length - 1) {
     const res = await fetch('/api/graph')
     graphData.value = await res.json()
@@ -83,53 +103,62 @@ function initCytoscape() {
       {
         selector: 'node',
         style: {
-          'background-color': '#64b5f6',
+          'background-color': '#81C784',
           'label': 'data(label)',
-          'color': '#fff',
+          'color': '#1B5E20',
           'text-valign': 'center',
           'text-halign': 'center',
           'font-size': '12px',
+          'font-weight': '500',
+          'font-family': 'Roboto, sans-serif',
           'width': 60,
-          'height': 60
+          'height': 60,
+          'border-width': 2,
+          'border-color': '#4CAF50'
         }
       },
       {
         selector: 'node[type="Company"]',
         style: {
-          'background-color': '#81c784',
-          'shape': 'rectangle'
+          'background-color': '#FFB74D',
+          'shape': 'roundrectangle',
+          'border-color': '#FF9800'
         }
       },
       {
         selector: 'node.deleted',
         style: {
-          'background-color': '#ef5350',
+          'background-color': '#E0E0E0',
           'opacity': 0.5,
           'border-width': 2,
-          'border-color': '#c62828'
+          'border-color': '#EF5350',
+          'border-style': 'dashed'
         }
       },
       {
         selector: 'edge',
         style: {
-          'width': 3,
-          'line-color': '#90caf9',
-          'target-arrow-color': '#90caf9',
+          'width': 2,
+          'line-color': '#90CAF9',
+          'target-arrow-color': '#90CAF9',
           'target-arrow-shape': 'triangle',
           'curve-style': 'bezier',
           'label': 'data(label)',
           'font-size': '10px',
-          'color': '#90caf9',
+          'font-weight': '400',
+          'color': '#546E7A',
+          'font-family': 'Roboto, sans-serif',
           'text-background-opacity': 1,
-          'text-background-color': '#0f1423',
-          'text-background-padding': '3px'
+          'text-background-color': '#FFFFFF',
+          'text-background-padding': '3px',
+          'text-background-shape': 'roundrectangle'
         }
       },
       {
         selector: 'edge.deleted',
         style: {
-          'line-color': '#ef5350',
-          'target-arrow-color': '#ef5350',
+          'line-color': '#EF5350',
+          'target-arrow-color': '#EF5350',
           'opacity': 0.4,
           'line-style': 'dashed'
         }
@@ -146,6 +175,13 @@ function initCytoscape() {
   cy.value.on('tap', 'node', (evt) => {
     const node = evt.target.data()
     selectedNode.value = graphData.value.nodes.find(n => n.id === node.id)
+    selectedRelationship.value = null
+  })
+
+  cy.value.on('tap', 'edge', (evt) => {
+    const edge = evt.target.data()
+    selectedRelationship.value = graphData.value.relationships.find(r => r.id === edge.id)
+    selectedNode.value = null
   })
 
   renderGraph()
@@ -156,7 +192,6 @@ function renderGraph() {
 
   const elements = []
 
-  // Add nodes
   graphData.value.nodes.forEach(node => {
     const label = node.properties.name || node.labels[0] || 'Node'
     elements.push({
@@ -171,7 +206,6 @@ function renderGraph() {
     })
   })
 
-  // Add edges
   graphData.value.relationships.forEach(rel => {
     elements.push({
       group: 'edges',
@@ -249,39 +283,79 @@ watch(playbackSpeed, () => {
 </script>
 
 <template>
-  <div id="app">
+  <div id="app" :class="{ loaded: isLoaded }">
     <header>
-      <h1>⏱️ Temporal Graph Database</h1>
+      <div class="header-content">
+        <div class="title-group">
+          <div class="logo-icon">
+            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+              <circle cx="20" cy="20" r="18" stroke="#4CAF50" stroke-width="2" fill="none"/>
+              <path d="M20 8 L20 20 L28 20" stroke="#4CAF50" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div>
+            <h1>Temporal Graph Database</h1>
+            <div class="subtitle">Time-travel through your data</div>
+          </div>
+        </div>
+
+        <div class="time-display-main">
+          <div class="time-value">{{ currentTimeDisplay }}</div>
+          <div class="date-value">{{ currentDateDisplay }}</div>
+        </div>
+      </div>
     </header>
 
     <div class="controls">
-      <div class="time-display">
-        {{ currentTimeDisplay }}
-      </div>
+      <div class="controls-inner">
+        <div class="slider-section">
+          <div class="slider-label">
+            <span>Timeline Position</span>
+            <span class="event-counter">Event {{ currentTimeIndex + 1 }} of {{ timelineEvents.length }}</span>
+          </div>
+          <div class="slider-container">
+            <input
+              type="range"
+              :min="0"
+              :max="timelineEvents.length - 1"
+              v-model="currentTimeIndex"
+              @input="onTimeSliderChange"
+            />
+          </div>
+        </div>
 
-      <div class="slider-container">
-        <input
-          type="range"
-          :min="0"
-          :max="timelineEvents.length - 1"
-          v-model="currentTimeIndex"
-          @input="onTimeSliderChange"
-        />
-      </div>
+        <div class="controls-row">
+          <div class="playback-controls">
+            <button class="control-btn icon-btn" @click="jumpToStart" title="Jump to start">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M3 3h2v14H3V3zm4 7l10-7v14L7 10z"/>
+              </svg>
+            </button>
+            <button class="control-btn play-btn" @click="togglePlayback">
+              <svg v-if="isPlaying" width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M6 4h3v12H6V4zm5 0h3v12h-3V4z"/>
+              </svg>
+              <svg v-else width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M5 3l12 7-12 7V3z"/>
+              </svg>
+            </button>
+            <button class="control-btn icon-btn" @click="jumpToEnd" title="Jump to end">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M15 3h2v14h-2V3zM3 10l10 7V3L3 10z"/>
+              </svg>
+            </button>
+          </div>
 
-      <div class="playback-controls">
-        <button @click="jumpToStart">⏮ Start</button>
-        <button @click="togglePlayback">{{ isPlaying ? '⏸ Pause' : '▶ Play' }}</button>
-        <button @click="jumpToEnd">⏭ End</button>
-      </div>
-
-      <div class="speed-control">
-        <select v-model="playbackSpeed">
-          <option :value="0.5">0.5x</option>
-          <option :value="1">1x</option>
-          <option :value="2">2x</option>
-          <option :value="5">5x</option>
-        </select>
+          <div class="speed-control">
+            <label>Speed</label>
+            <select v-model="playbackSpeed">
+              <option :value="0.5">0.5×</option>
+              <option :value="1">1×</option>
+              <option :value="2">2×</option>
+              <option :value="5">5×</option>
+            </select>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -289,41 +363,52 @@ watch(playbackSpeed, () => {
       <div id="cy"></div>
 
       <div class="sidebar">
-        <div class="stats">
-          <div class="stat-item">
-            <span class="stat-label">Nodes:</span>
-            <span class="stat-value">{{ graphData.nodes.length }}</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-label">Relationships:</span>
-            <span class="stat-value">{{ graphData.relationships.length }}</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-label">Timeline Events:</span>
-            <span class="stat-value">{{ timelineEvents.length }}</span>
+        <div class="stats-card">
+          <h2 class="card-title">Graph Statistics</h2>
+          <div class="stats-grid">
+            <div class="stat-item">
+              <div class="stat-label">Nodes</div>
+              <div class="stat-value">{{ graphData.nodes.length }}</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-label">Relationships</div>
+              <div class="stat-value">{{ graphData.relationships.length }}</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-label">Events</div>
+              <div class="stat-value">{{ timelineEvents.length }}</div>
+            </div>
           </div>
         </div>
 
-        <div class="node-details" v-if="selectedNode">
-          <h3>{{ selectedNode.properties.name || 'Node' }}</h3>
-
-          <div class="property" v-for="(value, key) in selectedNode.properties" :key="key">
-            <span class="property-key">{{ key }}:</span>
-            <span class="property-value">{{ value }}</span>
+        <div class="node-details-card" v-if="selectedNode">
+          <div class="card-header">
+            <h2 class="card-title">Node Details</h2>
+            <div class="node-status" :class="{ deleted: selectedNode.validTo }">
+              {{ selectedNode.validTo ? 'Deleted' : 'Active' }}
+            </div>
           </div>
 
-          <div class="property">
-            <span class="property-key">Labels:</span>
-            <span class="property-value">{{ selectedNode.labels.join(', ') }}</span>
-          </div>
+          <h3 class="node-name">{{ selectedNode.properties.name || 'Unnamed Node' }}</h3>
 
-          <div class="property" v-if="selectedNode.validTo">
-            <span class="property-key">Status:</span>
-            <span class="property-value" style="color: #ef5350;">Deleted</span>
+          <div class="properties-list">
+            <div class="property-group">
+              <div class="property-label">Labels</div>
+              <div class="property-tags">
+                <span class="tag" v-for="label in selectedNode.labels" :key="label">
+                  {{ label }}
+                </span>
+              </div>
+            </div>
+
+            <div class="property-item" v-for="(value, key) in selectedNode.properties" :key="key">
+              <div class="property-label">{{ key }}</div>
+              <div class="property-value">{{ value }}</div>
+            </div>
           </div>
 
           <div v-if="selectedNodeRelationships.length > 0" class="relationships-section">
-            <h4>Relationships</h4>
+            <h4 class="section-title">Relationships</h4>
             <div
               v-for="(rel, idx) in selectedNodeRelationships"
               :key="idx"
@@ -333,16 +418,55 @@ watch(playbackSpeed, () => {
               <div class="rel-header">
                 <span class="rel-direction">{{ rel.direction === 'outgoing' ? '→' : '←' }}</span>
                 <span class="rel-type">{{ rel.type }}</span>
-                <span class="rel-other-node">{{ rel.otherNode }}</span>
               </div>
+              <div class="rel-target">{{ rel.otherNode }}</div>
               <div v-if="Object.keys(rel.properties).length > 0" class="rel-properties">
                 <div v-for="(value, key) in rel.properties" :key="key" class="rel-property">
-                  <span class="property-key">{{ key }}:</span>
+                  <span class="property-label">{{ key }}</span>
                   <span class="property-value">{{ value }}</span>
                 </div>
               </div>
             </div>
           </div>
+        </div>
+
+        <div class="node-details-card" v-else-if="selectedRelationship">
+          <div class="card-header">
+            <h2 class="card-title">Relationship Details</h2>
+            <div class="node-status" :class="{ deleted: selectedRelationship.validTo }">
+              {{ selectedRelationship.validTo ? 'Deleted' : 'Active' }}
+            </div>
+          </div>
+
+          <h3 class="node-name">{{ selectedRelationship.type }}</h3>
+
+          <div class="properties-list">
+            <div class="property-group">
+              <div class="property-label">Direction</div>
+              <div class="connection-info">
+                <div class="connection-node">
+                  {{ graphData.nodes.find(n => n.id === selectedRelationship.from)?.properties?.name || 'Unknown' }}
+                </div>
+                <div class="connection-arrow">→</div>
+                <div class="connection-node">
+                  {{ graphData.nodes.find(n => n.id === selectedRelationship.to)?.properties?.name || 'Unknown' }}
+                </div>
+              </div>
+            </div>
+
+            <div class="property-item" v-for="(value, key) in selectedRelationship.properties" :key="key">
+              <div class="property-label">{{ key }}</div>
+              <div class="property-value">{{ value }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="empty-state" v-else>
+          <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+            <circle cx="32" cy="32" r="28" stroke="#E0E0E0" stroke-width="2" stroke-dasharray="4 4"/>
+            <circle cx="32" cy="32" r="4" fill="#BDBDBD"/>
+          </svg>
+          <p>Select a node to view details</p>
         </div>
       </div>
     </div>
@@ -350,6 +474,25 @@ watch(playbackSpeed, () => {
 </template>
 
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
+
+:root {
+  --primary: #4CAF50;
+  --primary-light: #81C784;
+  --primary-dark: #388E3C;
+  --secondary: #2196F3;
+  --secondary-light: #90CAF9;
+  --accent: #FF9800;
+  --accent-light: #FFB74D;
+  --error: #EF5350;
+  --surface: #FFFFFF;
+  --background: #F5F5F5;
+  --on-surface: #212121;
+  --on-surface-variant: #757575;
+  --outline: #E0E0E0;
+  --shadow: rgba(0, 0, 0, 0.12);
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -365,9 +508,10 @@ html, body {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: #0a0e27;
-  color: #fff;
+  font-family: 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--background);
+  color: var(--on-surface);
+  -webkit-font-smoothing: antialiased;
 }
 
 #app {
@@ -375,227 +519,557 @@ body {
   flex-direction: column;
   width: 100%;
   height: 100vh;
+  position: relative;
+  opacity: 0;
+  animation: fadeIn 0.4s ease forwards;
+}
+
+#app.loaded header,
+#app.loaded .controls,
+#app.loaded .sidebar {
+  animation: slideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+#app.loaded .controls {
+  animation-delay: 0.05s;
+}
+
+#app.loaded .sidebar {
+  animation-delay: 0.1s;
+}
+
+@keyframes fadeIn {
+  to { opacity: 1; }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 header {
-  background: #1a1f3a;
-  padding: 1rem 2rem;
-  border-bottom: 2px solid #2a3f5f;
+  background: var(--surface);
+  box-shadow: 0 2px 4px var(--shadow);
+  position: relative;
+  z-index: 10;
+}
+
+.header-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+}
+
+.title-group {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.logo-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.logo-icon svg {
+  width: 32px;
+  height: 32px;
 }
 
 h1 {
-  font-size: 1.5rem;
-  font-weight: 600;
-  color: #64b5f6;
+  font-size: 20px;
+  font-weight: 500;
+  color: var(--on-surface);
+  margin: 0;
+  letter-spacing: 0.25px;
+}
+
+.subtitle {
+  font-size: 12px;
+  color: var(--on-surface-variant);
+  margin-top: 2px;
+  font-weight: 400;
+}
+
+.time-display-main {
+  text-align: right;
+}
+
+.time-value {
+  font-size: 22px;
+  font-weight: 400;
+  color: var(--primary);
+  letter-spacing: 0.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.date-value {
+  font-size: 11px;
+  color: var(--on-surface-variant);
+  margin-top: 2px;
+  font-weight: 400;
+}
+
+.controls {
+  background: var(--surface);
+  border-bottom: 1px solid var(--outline);
+  padding: 12px 20px;
+}
+
+.controls-inner {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.slider-section {
+  margin-bottom: 12px;
+}
+
+.slider-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--on-surface-variant);
+}
+
+.event-counter {
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.slider-container {
+  position: relative;
+}
+
+input[type="range"] {
+  width: 100%;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--outline);
+  outline: none;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: var(--primary);
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+input[type="range"]::-webkit-slider-thumb:active {
+  transform: scale(1.1);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: var(--primary);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.controls-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+}
+
+.playback-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.control-btn {
+  background: var(--surface);
+  color: var(--primary);
+  border: 1px solid var(--outline);
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-family: 'Roboto', sans-serif;
+  font-weight: 500;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 3px var(--shadow);
+}
+
+.control-btn:hover {
+  background: var(--primary);
+  color: var(--surface);
+  box-shadow: 0 2px 6px var(--shadow);
+  transform: translateY(-1px);
+}
+
+.control-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 3px var(--shadow);
+}
+
+.icon-btn {
+  padding: 8px 12px;
+}
+
+.play-btn {
+  background: var(--primary);
+  color: var(--surface);
+}
+
+.play-btn:hover {
+  background: var(--primary-dark);
+}
+
+.speed-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.speed-control label {
+  font-size: 14px;
+  color: var(--on-surface-variant);
+  font-weight: 500;
+}
+
+select {
+  background: var(--surface);
+  color: var(--on-surface);
+  border: 1px solid var(--outline);
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-family: 'Roboto', sans-serif;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 1px 3px var(--shadow);
+}
+
+select:hover {
+  border-color: var(--primary);
+}
+
+select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
 }
 
 .container {
   display: flex;
   flex: 1;
   overflow: hidden;
+  position: relative;
 }
 
 #cy {
   flex: 1;
-  background: #0f1423;
+  background: #FAFAFA;
 }
 
 .sidebar {
-  width: 320px;
-  background: #1a1f3a;
-  border-left: 2px solid #2a3f5f;
-  padding: 1.5rem;
+  width: 360px;
+  background: var(--surface);
+  border-left: 1px solid var(--outline);
+  padding: 24px;
   overflow-y: auto;
+  box-shadow: -2px 0 8px var(--shadow);
 }
 
-.controls {
-  background: #151932;
-  padding: 1.5rem;
-  border-bottom: 2px solid #2a3f5f;
+.sidebar::-webkit-scrollbar {
+  width: 8px;
 }
 
-.timeline-controls {
-  margin-top: 1rem;
+.sidebar::-webkit-scrollbar-track {
+  background: var(--background);
 }
 
-.slider-container {
-  margin: 1rem 0;
-}
-
-input[type="range"] {
-  width: 100%;
-  height: 6px;
-  background: #2a3f5f;
-  outline: none;
-  border-radius: 3px;
-}
-
-input[type="range"]::-webkit-slider-thumb {
-  appearance: none;
-  width: 18px;
-  height: 18px;
-  background: #64b5f6;
-  cursor: pointer;
-  border-radius: 50%;
-}
-
-.time-display {
-  text-align: center;
-  font-size: 0.9rem;
-  color: #64b5f6;
-  margin-bottom: 1rem;
-}
-
-.playback-controls {
-  display: flex;
-  gap: 0.5rem;
-  justify-content: center;
-  margin-top: 1rem;
-}
-
-button {
-  background: #64b5f6;
-  color: #0a0e27;
-  border: none;
-  padding: 0.6rem 1.2rem;
-  border-radius: 6px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-button:hover {
-  background: #90caf9;
-  transform: translateY(-1px);
-}
-
-button:active {
-  transform: translateY(0);
-}
-
-button.secondary {
-  background: #2a3f5f;
-  color: #fff;
-}
-
-button.secondary:hover {
-  background: #3a4f6f;
-}
-
-.node-details {
-  margin-top: 1.5rem;
-}
-
-.node-details h3 {
-  font-size: 1rem;
-  margin-bottom: 0.8rem;
-  color: #64b5f6;
-}
-
-.property {
-  background: #0f1423;
-  padding: 0.6rem;
-  margin-bottom: 0.5rem;
+.sidebar::-webkit-scrollbar-thumb {
+  background: var(--outline);
   border-radius: 4px;
-  font-size: 0.85rem;
 }
 
-.property-key {
-  color: #90caf9;
-  font-weight: 600;
+.sidebar::-webkit-scrollbar-thumb:hover {
+  background: #BDBDBD;
 }
 
-.property-value {
-  color: #fff;
-  margin-left: 0.5rem;
+.stats-card, .node-details-card {
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 3px var(--shadow);
 }
 
-.deleted {
-  opacity: 0.5;
-  border: 1px solid #ef5350;
+.card-title {
+  font-size: 14px;
+  font-weight: 500;
+  text-transform: uppercase;
+  color: var(--on-surface-variant);
+  margin-bottom: 16px;
+  letter-spacing: 0.5px;
 }
 
-.stats {
-  padding: 1rem;
-  background: #0f1423;
-  border-radius: 6px;
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.node-status {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 4px 12px;
+  background: var(--primary-light);
+  color: var(--primary-dark);
+  border-radius: 12px;
+}
+
+.node-status.deleted {
+  background: #FFCDD2;
+  color: #C62828;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
 }
 
 .stat-item {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 0.5rem;
-  font-size: 0.9rem;
+  text-align: center;
+  padding: 16px 8px;
+  background: var(--background);
+  border-radius: 8px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.stat-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px var(--shadow);
 }
 
 .stat-label {
-  color: #90caf9;
+  font-size: 12px;
+  color: var(--on-surface-variant);
+  margin-bottom: 8px;
+  font-weight: 400;
 }
 
 .stat-value {
-  font-weight: 600;
+  font-size: 24px;
+  font-weight: 300;
+  color: var(--primary);
 }
 
-.speed-control {
-  margin-top: 0.5rem;
+.node-name {
+  font-size: 20px;
+  color: var(--on-surface);
+  margin-bottom: 20px;
+  font-weight: 500;
 }
 
-select {
-  background: #2a3f5f;
-  color: #fff;
-  border: none;
-  padding: 0.5rem;
+.properties-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.property-group {
+  margin-bottom: 8px;
+}
+
+.property-item {
+  background: var(--background);
+  padding: 12px;
   border-radius: 4px;
-  width: 100%;
-  font-size: 0.9rem;
+  border-left: 3px solid var(--primary);
+  transition: all 0.2s;
+}
+
+.property-item:hover {
+  background: #E8F5E9;
+}
+
+.property-label {
+  font-size: 12px;
+  color: var(--on-surface-variant);
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+
+.property-value {
+  color: var(--on-surface);
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.property-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag {
+  background: var(--primary-light);
+  color: var(--primary-dark);
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 16px;
+}
+
+.section-title {
+  font-size: 14px;
+  font-weight: 500;
+  text-transform: uppercase;
+  color: var(--on-surface-variant);
+  margin: 20px 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--outline);
+  letter-spacing: 0.5px;
 }
 
 .relationships-section {
-  margin-top: 1.5rem;
-}
-
-.relationships-section h4 {
-  font-size: 0.9rem;
-  margin-bottom: 0.8rem;
-  color: #64b5f6;
+  margin-top: 20px;
 }
 
 .relationship-item {
-  background: #0f1423;
-  padding: 0.8rem;
-  margin-bottom: 0.5rem;
+  background: var(--background);
+  padding: 12px;
+  margin-bottom: 8px;
   border-radius: 4px;
-  font-size: 0.85rem;
+  border-left: 3px solid var(--secondary-light);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.relationship-item:hover {
+  background: #E3F2FD;
+  transform: translateX(4px);
+}
+
+.relationship-item.deleted {
+  opacity: 0.6;
+  border-left-color: var(--error);
 }
 
 .rel-header {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
+  gap: 8px;
+  margin-bottom: 4px;
 }
 
 .rel-direction {
-  color: #90caf9;
-  font-size: 1.2rem;
+  color: var(--secondary);
+  font-size: 18px;
+  font-weight: 500;
 }
 
 .rel-type {
-  color: #64b5f6;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  color: var(--secondary);
+  letter-spacing: 0.5px;
 }
 
-.rel-other-node {
-  color: #fff;
+.rel-target {
+  color: var(--on-surface);
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 8px;
 }
 
 .rel-properties {
-  margin-left: 1.5rem;
-  padding-top: 0.5rem;
-  border-top: 1px solid #2a3f5f;
+  padding-top: 8px;
+  border-top: 1px solid var(--outline);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .rel-property {
-  margin-bottom: 0.3rem;
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.rel-property .property-label {
+  margin: 0;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 48px 16px;
+  color: var(--on-surface-variant);
+}
+
+.empty-state svg {
+  margin-bottom: 16px;
+}
+
+.empty-state p {
+  font-size: 14px;
+}
+
+.connection-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--background);
+  padding: 12px;
+  border-radius: 4px;
+  margin-top: 8px;
+}
+
+.connection-node {
+  flex: 1;
+  text-align: center;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--on-surface);
+}
+
+.connection-arrow {
+  color: var(--secondary);
+  font-size: 20px;
+  font-weight: 500;
 }
 </style>
