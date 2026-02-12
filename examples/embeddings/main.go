@@ -2,56 +2,33 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/MironCo/gravecdb/graph"
 )
-
-// MockEmbedder is a simple embedder for demonstration
-// In production, use graph.NewOpenAIEmbedder() instead
-type MockEmbedder struct {
-	embeddings map[string][]float32
-}
-
-func NewMockEmbedder() *MockEmbedder {
-	return &MockEmbedder{
-		embeddings: map[string][]float32{
-			// Query embeddings
-			"backend developers":    {0.8, 0.2, 0.1},
-			"frontend developers":   {0.2, 0.8, 0.1},
-			"data scientists":       {0.1, 0.2, 0.8},
-			"engineering managers":  {0.6, 0.3, 0.4},
-
-			// Role embeddings (what nodes will be embedded as)
-			"backend engineer":   {0.75, 0.25, 0.1},
-			"frontend developer": {0.25, 0.75, 0.1},
-			"data scientist":     {0.1, 0.25, 0.75},
-			"engineering manager": {0.55, 0.35, 0.4},
-			"devops engineer":    {0.5, 0.3, 0.3},
-		},
-	}
-}
-
-func (m *MockEmbedder) Embed(text string) ([]float32, error) {
-	if vec, ok := m.embeddings[text]; ok {
-		return vec, nil
-	}
-	// Default embedding for unknown text
-	return []float32{0.33, 0.33, 0.33}, nil
-}
 
 func main() {
 	fmt.Println("=== Vector Embedding & Semantic Search Demo ===")
 	fmt.Println()
 
+	// Create embedder from environment or use default Ollama
+	embedder, err := getEmbedder()
+	if err != nil {
+		fmt.Printf("Error initializing embedder: %v\n", err)
+		fmt.Println("\nMake sure Ollama is running:")
+		fmt.Println("  ollama pull nomic-embed-text")
+		fmt.Println("  ollama serve")
+		os.Exit(1)
+	}
+
+	// Display embedder info
+	printEmbedderInfo(embedder)
+
 	// Create a new graph
 	db := graph.NewGraph()
-	embedder := NewMockEmbedder()
-
-	// For real OpenAI embeddings, use:
-	// embedder := graph.NewOpenAIEmbedder("") // Uses OPENAI_API_KEY env var
 
 	// Create some people with roles
-	fmt.Println("Creating nodes...")
+	fmt.Println("\nCreating nodes...")
 	createPeople(db)
 
 	// Step 1: Embed all person nodes using their role property
@@ -82,10 +59,30 @@ func main() {
 	runQuery(db, embedder, limitQuery, "Top 2 matches for 'engineering managers'")
 
 	fmt.Println("\n=== Demo Complete ===")
-	fmt.Println("\nTo use real embeddings, replace MockEmbedder with:")
-	fmt.Println("  embedder := graph.NewOpenAIEmbedder(\"\")")
-	fmt.Println("  // or")
-	fmt.Println("  embedder := graph.NewOpenAIEmbedderWithModel(\"\", \"text-embedding-3-large\")")
+}
+
+func getEmbedder() (graph.Embedder, error) {
+	// Try to get embedder from DSN or environment
+	embedder, err := graph.DefaultEmbedder()
+	if err == nil {
+		return embedder, nil
+	}
+
+	// Fall back to default Ollama
+	return graph.NewOllamaEmbedder(), nil
+}
+
+func printEmbedderInfo(embedder graph.Embedder) {
+	switch e := embedder.(type) {
+	case *graph.OllamaEmbedder:
+		fmt.Printf("Using Ollama embedder\n")
+		fmt.Printf("  Model: %s\n", e.Model())
+	case *graph.OpenAIEmbedder:
+		fmt.Printf("Using OpenAI embedder\n")
+		fmt.Printf("  Model: %s\n", e.Model())
+	default:
+		fmt.Printf("Using embedder: %T\n", embedder)
+	}
 }
 
 func createPeople(db *graph.Graph) {

@@ -1,20 +1,43 @@
-# Temporal Graph Database
+# GravecDB
 
-A Neo4j-inspired graph database with temporal capabilities built in Go, featuring time-travel queries and real-time visualization.
-
-## Features
-
-- **Labeled Property Graph** - Nodes with labels and properties, relationships with types and properties
-- **Temporal Queries** - Query the graph at any point in time with `AsOf(timestamp)`
-- **Soft Deletes** - All data preserved for historical queries (ValidFrom/ValidTo timestamps)
-- **Disk Persistence** - Write-Ahead Log (WAL) + Snapshots for durability
-- **Interactive Visualization** - Real-time graph visualization with time-travel slider
-- **Cypher-like Query Language** - Pattern matching with WHERE clauses and property filtering
-- **Path-Finding Algorithms** - Shortest path, all paths, and path existence checks
+A temporal graph database with built-in vector embeddings, featuring time-travel queries and real-time visualization.
 
 ## Quick Start
 
-### Development Mode (Recommended)
+### Docker (Easiest)
+
+Includes Ollama for embeddings:
+
+```bash
+# Start everything (database + Ollama)
+make compose-up
+
+# Access at http://localhost:8080
+```
+
+To stop:
+```bash
+make compose-down
+```
+
+### Local with Ollama
+
+If you already have Ollama installed:
+
+```bash
+# Pull the embedding model
+ollama pull nomic-embed-text
+
+# Set up environment
+export GRAVECDB_DSN="gravecdb://0.0.0.0:8080/data?embedder=ollama://localhost:11434/nomic-embed-text"
+
+# Run the server
+make run
+```
+
+Open your browser to `http://localhost:8080`
+
+### Development Mode
 
 Run the backend and frontend separately for hot-reload:
 
@@ -28,20 +51,15 @@ make web-dev
 
 Open your browser to `http://localhost:5173`
 
-### Production Mode
+## Features
 
-Build and run the production binary:
-
-```bash
-# Build everything
-make build
-make web-build
-
-# Run the server (serves both API and static frontend)
-make run
-```
-
-Open your browser to `http://localhost:8080`
+- **Temporal Queries** - Query the graph at any point in time with `AsOf(timestamp)`
+- **Vector Embeddings** - Versioned semantic search with Ollama or OpenAI
+- **Soft Deletes** - All data preserved for historical queries (ValidFrom/ValidTo timestamps)
+- **Cypher-like Query Language** - Pattern matching with WHERE clauses and semantic search
+- **Disk Persistence** - Write-Ahead Log (WAL) + Snapshots for durability
+- **Interactive Visualization** - Real-time graph visualization with time-travel slider
+- **Path-Finding Algorithms** - Shortest path, all paths, and path existence checks
 
 ### CLI Demos
 
@@ -64,8 +82,14 @@ make demo-query
 # Temporal path-finding demo (3D path-finding through time!)
 make demo-temporal-paths
 
+# Vector embeddings & semantic search (requires Ollama)
+make demo-embeddings
+
 # Client library demo (requires server running)
 make demo-client
+
+# Performance comparison demo
+make demo-performance
 ```
 
 ## API Endpoints
@@ -81,6 +105,39 @@ POST /api/nodes                    # Create node
 POST /api/relationships            # Create relationship
 DELETE /api/nodes/:id              # Soft delete node
 DELETE /api/relationships/:id      # Soft delete relationship
+```
+
+## Configuration
+
+### DSN Format
+
+```
+gravecdb://[username:password@][host][:port]/[datadir]?[options]
+```
+
+Examples:
+```bash
+# Local persistence
+gravecdb:///data
+
+# With authentication
+gravecdb://admin:secret@0.0.0.0:8080/data
+
+# With Ollama embeddings
+gravecdb://0.0.0.0:8080/data?embedder=ollama://localhost:11434/nomic-embed-text
+
+# With OpenAI embeddings
+gravecdb://0.0.0.0:8080/data?embedder=openai://
+
+# In-memory only (no persistence)
+gravecdb://:memory:
+```
+
+Environment variables:
+```bash
+GRAVECDB_DSN              # Connection string
+EMBEDDER_URL              # Embedder configuration
+OPENAI_API_KEY            # For OpenAI embeddings
 ```
 
 ## Example Usage
@@ -110,6 +167,25 @@ historicalView := db.AsOf(time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC))
 historicalPeople := historicalView.GetNodesByLabel("Person")
 ```
 
+### Vector Embeddings & Semantic Search
+
+```go
+// Create embedder
+embedder := graph.NewOllamaEmbedder()
+
+// Create and embed nodes
+db.ExecuteQueryWithEmbedder(
+  graph.ParseQuery(`MATCH (p:Person) EMBED p.role RETURN p`),
+  embedder,
+)
+
+// Semantic search
+result, _ := db.ExecuteQueryWithEmbedder(
+  graph.ParseQuery(`MATCH (p:Person) SIMILAR TO "backend developers" RETURN p.name`),
+  embedder,
+)
+```
+
 ### Client Library (Remote Connection)
 
 ```go
@@ -126,6 +202,14 @@ result, _ := conn.Query(`
   RETURN p.name, c.name
 `)
 
+// Semantic search query
+result, _ := conn.Query(`
+  MATCH (p:Person)
+  SIMILAR TO "backend developers"
+  THRESHOLD 0.8
+  RETURN p.name, p.role
+`)
+
 // Create nodes and relationships
 personID, _ := conn.CreateNode(
   []string{"Person"},
@@ -138,6 +222,33 @@ relID, _ := conn.CreateRelationship(
   companyID,
   map[string]interface{}{"title": "Engineer"},
 )
+```
+
+### Query Language Examples
+
+```cypher
+-- Create nodes
+CREATE (p:Person {name: "Alice", age: 28})
+
+-- Pattern matching
+MATCH (p:Person)-[:WORKS_AT]->(c:Company)
+WHERE p.age > 25
+RETURN p.name, c.name
+
+-- Temporal queries
+MATCH (p:Person) AT TIME 1609459200 RETURN p
+
+-- Generate embeddings
+MATCH (p:Person) EMBED p.role RETURN p
+
+-- Semantic search
+MATCH (p:Person) SIMILAR TO "backend engineers" LIMIT 10 RETURN p.name
+
+-- With similarity threshold
+MATCH (p:Person) SIMILAR TO "data scientists" THRESHOLD 0.8 RETURN p.name
+
+-- Path finding
+MATCH path = shortestPath((a:Person)-[*]-(b:Person)) RETURN path
 ```
 
 ## Visualization Controls
@@ -203,7 +314,8 @@ The temporal view filters nodes/relationships to only show those valid at the qu
 
 - **Backend**: Go + Gin
 - **Frontend**: Vue 3 + Vite + Cytoscape.js
-- **Persistence**: JSON (WAL + Snapshots)
+- **Embeddings**: Ollama (local) or OpenAI (cloud)
+- **Persistence**: JSON WAL + Binary Snapshots (gob)
 
 ## Development
 

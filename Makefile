@@ -1,4 +1,4 @@
-.PHONY: build run server demo-basic demo-temporal demo-persistence demo-pathfinding demo-query demo-temporal-paths demo-client demo-performance web-dev web-build docker docker-run clean
+.PHONY: build run server demo-basic demo-temporal demo-persistence demo-pathfinding demo-query demo-temporal-paths demo-embeddings demo-client demo-performance web-dev web-build docker docker-run compose-up compose-down clean
 
 # Build the server binary
 build:
@@ -49,6 +49,10 @@ run-query: demo-query
 demo-temporal-paths:
 	@cd examples/temporal-paths && go run main.go
 
+# Run the embeddings demo (requires Ollama)
+demo-embeddings:
+	@cd examples/embeddings && go run main.go
+
 # Run the client library demo (requires server running)
 demo-client:
 	@cd examples/client-demo && go run main.go
@@ -65,6 +69,15 @@ docker:
 # Run Docker container
 docker-run:
 	@docker run -p 8080:8080 -v $(PWD)/data:/data gravecdb
+
+# Start with Docker Compose (includes Ollama + auto-pulls embedding model)
+compose-up:
+	@docker compose up -d
+	@echo "GravecDB + Ollama starting (model will be pulled automatically)..."
+
+# Stop Docker Compose
+compose-down:
+	@docker compose down
 
 # Clean build artifacts
 clean:
