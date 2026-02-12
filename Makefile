@@ -1,4 +1,4 @@
-.PHONY: build run server demo-temporal demo-persistence web-dev web-build clean
+.PHONY: build run server demo-basic demo-temporal demo-persistence demo-pathfinding demo-query demo-temporal-paths demo-client web-dev web-build clean
 
 # Build the server binary
 build:
@@ -33,6 +33,22 @@ demo-temporal:
 # Run the persistence demo
 demo-persistence:
 	@cd examples/persistence && go run main.go
+
+# Run the pathfinding demo
+demo-pathfinding:
+	@cd examples/pathfinding && go run main.go
+
+# Run the query language demo
+demo-query:
+	@cd examples/query && go run main.go
+
+# Run the temporal path-finding demo
+demo-temporal-paths:
+	@cd examples/temporal-paths && go run main.go
+
+# Run the client library demo (requires server running)
+demo-client:
+	@cd examples/client-demo && go run main.go
 
 # Clean build artifacts
 clean:

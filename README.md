@@ -9,6 +9,8 @@ A Neo4j-inspired graph database with temporal capabilities built in Go, featurin
 - **Soft Deletes** - All data preserved for historical queries (ValidFrom/ValidTo timestamps)
 - **Disk Persistence** - Write-Ahead Log (WAL) + Snapshots for durability
 - **Interactive Visualization** - Real-time graph visualization with time-travel slider
+- **Cypher-like Query Language** - Pattern matching with WHERE clauses and property filtering
+- **Path-Finding Algorithms** - Shortest path, all paths, and path existence checks
 
 ## Quick Start
 
@@ -52,21 +54,38 @@ make demo-temporal
 
 # Persistence demo
 make demo-persistence
+
+# Path-finding algorithms demo
+make demo-pathfinding
+
+# Cypher-like query language demo
+make demo-query
+
+# Temporal path-finding demo (3D path-finding through time!)
+make demo-temporal-paths
+
+# Client library demo (requires server running)
+make demo-client
 ```
 
 ## API Endpoints
 
 ```
-GET  /api/graph              # Current graph state
-GET  /api/graph/asof?t=TIME  # Graph at specific timestamp
-GET  /api/timeline           # All events in chronological order
-POST /api/nodes              # Create node
-POST /api/relationships      # Create relationship
-DELETE /api/nodes/:id        # Soft delete node
-DELETE /api/relationships/:id # Soft delete relationship
+GET  /api/graph                    # Current graph state
+GET  /api/graph/asof?t=TIME        # Graph at specific timestamp
+GET  /api/timeline                 # All events in chronological order
+POST /api/query                    # Execute Cypher-like query
+GET  /api/path/shortest?from=X&to=Y # Find shortest path between nodes
+GET  /api/path/all?from=X&to=Y     # Find all paths between nodes
+POST /api/nodes                    # Create node
+POST /api/relationships            # Create relationship
+DELETE /api/nodes/:id              # Soft delete node
+DELETE /api/relationships/:id      # Soft delete relationship
 ```
 
 ## Example Usage
+
+### Embedded Database
 
 ```go
 // Create a graph database
@@ -89,6 +108,36 @@ people := db.GetNodesByLabel("Person")
 // Time travel - see graph as it was on Jan 1, 2023
 historicalView := db.AsOf(time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC))
 historicalPeople := historicalView.GetNodesByLabel("Person")
+```
+
+### Client Library (Remote Connection)
+
+```go
+import "github.com/miron/go-graph-database/client"
+
+// Connect to a running server
+conn, _ := client.Connect("http://localhost:8080")
+defer conn.Close()
+
+// Execute Cypher-like queries
+result, _ := conn.Query(`
+  MATCH (p:Person)-[:WORKS_AT]->(c:Company)
+  WHERE p.role = "Engineer"
+  RETURN p.name, c.name
+`)
+
+// Create nodes and relationships
+personID, _ := conn.CreateNode(
+  []string{"Person"},
+  map[string]interface{}{"name": "Alice", "age": 28},
+)
+
+relID, _ := conn.CreateRelationship(
+  "WORKS_AT",
+  personID,
+  companyID,
+  map[string]interface{}{"title": "Engineer"},
+)
 ```
 
 ## Visualization Controls

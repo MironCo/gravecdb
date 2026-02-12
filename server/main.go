@@ -48,6 +48,13 @@ func main() {
 		api.GET("/graph/asof", getGraphAsOf)
 		api.GET("/timeline", getTimeline)
 
+		// Cypher-like query endpoint
+		api.POST("/query", executeQuery)
+
+		// Path-finding endpoints
+		api.GET("/path/shortest", findShortestPath)
+		api.GET("/path/all", findAllPaths)
+
 		// CRUD operations
 		api.POST("/nodes", createNode)
 		api.POST("/relationships", createRelationship)
@@ -233,6 +240,111 @@ func deleteRelationship(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "relationship deleted"})
 }
 
+// executeQuery executes a Cypher-like query
+func executeQuery(c *gin.Context) {
+	var req struct {
+		Query string `json:"query"`
+	}
+
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Parse the query
+	query, err := graph.ParseQuery(req.Query)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "parse error: " + err.Error()})
+		return
+	}
+
+	// Execute the query
+	result, err := db.ExecuteQuery(query)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "execution error: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// findShortestPath finds the shortest path between two nodes
+func findShortestPath(c *gin.Context) {
+	fromID := c.Query("from")
+	toID := c.Query("to")
+
+	if fromID == "" || toID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "from and to parameters required"})
+		return
+	}
+
+	path := db.ShortestPath(fromID, toID)
+	if path == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no path found"})
+		return
+	}
+
+	// Convert to response format
+	nodeResponses := []NodeResponse{}
+	for _, node := range path.Nodes {
+		nodeResponses = append(nodeResponses, nodeToResponse(node))
+	}
+
+	relResponses := []RelationshipResponse{}
+	for _, rel := range path.Relationships {
+		relResponses = append(relResponses, relToResponse(rel))
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"nodes":         nodeResponses,
+		"relationships": relResponses,
+		"length":        path.Length,
+	})
+}
+
+// findAllPaths finds all paths between two nodes
+func findAllPaths(c *gin.Context) {
+	fromID := c.Query("from")
+	toID := c.Query("to")
+	maxDepth := 10 // Default max depth
+
+	if fromID == "" || toID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "from and to parameters required"})
+		return
+	}
+
+	paths := db.AllPaths(fromID, toID, maxDepth)
+	if len(paths) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no paths found"})
+		return
+	}
+
+	// Convert to response format
+	pathResponses := []map[string]interface{}{}
+	for _, path := range paths {
+		nodeResponses := []NodeResponse{}
+		for _, node := range path.Nodes {
+			nodeResponses = append(nodeResponses, nodeToResponse(node))
+		}
+
+		relResponses := []RelationshipResponse{}
+		for _, rel := range path.Relationships {
+			relResponses = append(relResponses, relToResponse(rel))
+		}
+
+		pathResponses = append(pathResponses, map[string]interface{}{
+			"nodes":         nodeResponses,
+			"relationships": relResponses,
+			"length":        path.Length,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"paths": pathResponses,
+		"count": len(pathResponses),
+	})
+}
+
 // Helper functions
 
 func buildGraphResponse(asOf *time.Time) GraphResponse {
@@ -336,65 +448,134 @@ func getAllRelationships() []*graph.Relationship {
 	return rels
 }
 
-// loadDemoData loads the same demo data from temporal_demo.go
+// loadDemoData loads demo data with more nodes and relationships
 func loadDemoData() {
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
+	// Create people
 	alice := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 	db.SetNodeProperty(alice.ID, "role", "Engineer")
-
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	bob := db.CreateNode("Person")
 	db.SetNodeProperty(bob.ID, "name", "Bob")
 	db.SetNodeProperty(bob.ID, "role", "Designer")
+	time.Sleep(50 * time.Millisecond)
 
-	time.Sleep(100 * time.Millisecond)
+	carol := db.CreateNode("Person")
+	db.SetNodeProperty(carol.ID, "name", "Carol")
+	db.SetNodeProperty(carol.ID, "role", "Manager")
+	time.Sleep(50 * time.Millisecond)
 
+	david := db.CreateNode("Person")
+	db.SetNodeProperty(david.ID, "name", "David")
+	db.SetNodeProperty(david.ID, "role", "DevOps")
+	time.Sleep(50 * time.Millisecond)
+
+	eve := db.CreateNode("Person")
+	db.SetNodeProperty(eve.ID, "name", "Eve")
+	db.SetNodeProperty(eve.ID, "role", "PM")
+	time.Sleep(50 * time.Millisecond)
+
+	frank := db.CreateNode("Person")
+	db.SetNodeProperty(frank.ID, "name", "Frank")
+	db.SetNodeProperty(frank.ID, "role", "Data Scientist")
+	time.Sleep(50 * time.Millisecond)
+
+	// Create companies
 	techCorp := db.CreateNode("Company")
 	db.SetNodeProperty(techCorp.ID, "name", "TechCorp")
-
-	time.Sleep(100 * time.Millisecond)
-
-	aliceJob1, _ := db.CreateRelationship("WORKS_AT", alice.ID, techCorp.ID)
-	db.SetRelationshipProperty(aliceJob1.ID, "title", "Junior Engineer")
-
-	time.Sleep(100 * time.Millisecond)
-
-	bobJob, _ := db.CreateRelationship("WORKS_AT", bob.ID, techCorp.ID)
-	db.SetRelationshipProperty(bobJob.ID, "title", "Senior Designer")
-
-	time.Sleep(100 * time.Millisecond)
-
-	friendship, _ := db.CreateRelationship("FRIENDS_WITH", alice.ID, bob.ID)
-	db.SetRelationshipProperty(friendship.ID, "since", 2020)
-
-	time.Sleep(500 * time.Millisecond)
-
-	// Alice gets promoted
-	db.DeleteRelationship(aliceJob1.ID)
-	time.Sleep(100 * time.Millisecond)
-
-	aliceJob2, _ := db.CreateRelationship("WORKS_AT", alice.ID, techCorp.ID)
-	db.SetRelationshipProperty(aliceJob2.ID, "title", "Senior Engineer")
-
-	time.Sleep(500 * time.Millisecond)
-
-	// Bob changes jobs
-	db.DeleteRelationship(bobJob.ID)
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	startup := db.CreateNode("Company")
 	db.SetNodeProperty(startup.ID, "name", "CoolStartup")
+	time.Sleep(50 * time.Millisecond)
 
-	time.Sleep(100 * time.Millisecond)
+	bigCo := db.CreateNode("Company")
+	db.SetNodeProperty(bigCo.ID, "name", "BigCo")
+	time.Sleep(50 * time.Millisecond)
+
+	// Initial employment at TechCorp
+	aliceJob1, _ := db.CreateRelationship("WORKS_AT", alice.ID, techCorp.ID)
+	db.SetRelationshipProperty(aliceJob1.ID, "title", "Junior Engineer")
+	time.Sleep(50 * time.Millisecond)
+
+	bobJob1, _ := db.CreateRelationship("WORKS_AT", bob.ID, techCorp.ID)
+	db.SetRelationshipProperty(bobJob1.ID, "title", "Senior Designer")
+	time.Sleep(50 * time.Millisecond)
+
+	carolJob1, _ := db.CreateRelationship("WORKS_AT", carol.ID, techCorp.ID)
+	db.SetRelationshipProperty(carolJob1.ID, "title", "Engineering Manager")
+	time.Sleep(50 * time.Millisecond)
+
+	davidJob1, _ := db.CreateRelationship("WORKS_AT", david.ID, bigCo.ID)
+	db.SetRelationshipProperty(davidJob1.ID, "title", "DevOps Engineer")
+	time.Sleep(50 * time.Millisecond)
+
+	eveJob1, _ := db.CreateRelationship("WORKS_AT", eve.ID, startup.ID)
+	db.SetRelationshipProperty(eveJob1.ID, "title", "Product Manager")
+	time.Sleep(50 * time.Millisecond)
+
+	frankJob1, _ := db.CreateRelationship("WORKS_AT", frank.ID, bigCo.ID)
+	db.SetRelationshipProperty(frankJob1.ID, "title", "Senior Data Scientist")
+	time.Sleep(50 * time.Millisecond)
+
+	// Friendships
+	friendship1, _ := db.CreateRelationship("FRIENDS_WITH", alice.ID, bob.ID)
+	db.SetRelationshipProperty(friendship1.ID, "since", 2020)
+	time.Sleep(50 * time.Millisecond)
+
+	friendship2, _ := db.CreateRelationship("FRIENDS_WITH", bob.ID, david.ID)
+	db.SetRelationshipProperty(friendship2.ID, "since", 2019)
+	time.Sleep(50 * time.Millisecond)
+
+	friendship3, _ := db.CreateRelationship("FRIENDS_WITH", carol.ID, eve.ID)
+	db.SetRelationshipProperty(friendship3.ID, "since", 2021)
+	time.Sleep(50 * time.Millisecond)
+
+	// Mentorship
+	mentorship1, _ := db.CreateRelationship("MENTORS", carol.ID, alice.ID)
+	db.SetRelationshipProperty(mentorship1.ID, "started", 2021)
+	time.Sleep(50 * time.Millisecond)
+
+	mentorship2, _ := db.CreateRelationship("MENTORS", frank.ID, alice.ID)
+	db.SetRelationshipProperty(mentorship2.ID, "started", 2022)
+	time.Sleep(200 * time.Millisecond)
+
+	// Alice gets promoted
+	db.DeleteRelationship(aliceJob1.ID)
+	time.Sleep(50 * time.Millisecond)
+
+	aliceJob2, _ := db.CreateRelationship("WORKS_AT", alice.ID, techCorp.ID)
+	db.SetRelationshipProperty(aliceJob2.ID, "title", "Senior Engineer")
+	time.Sleep(200 * time.Millisecond)
+
+	// Bob moves to startup
+	db.DeleteRelationship(bobJob1.ID)
+	time.Sleep(50 * time.Millisecond)
 
 	bobJob2, _ := db.CreateRelationship("WORKS_AT", bob.ID, startup.ID)
 	db.SetRelationshipProperty(bobJob2.ID, "title", "Design Lead")
+	time.Sleep(100 * time.Millisecond)
 
-	time.Sleep(500 * time.Millisecond)
+	// Friendship ends due to job change
+	db.DeleteRelationship(friendship1.ID)
+	time.Sleep(200 * time.Millisecond)
 
-	// Friendship ends
-	db.DeleteRelationship(friendship.ID)
+	// David joins startup too
+	db.DeleteRelationship(davidJob1.ID)
+	time.Sleep(50 * time.Millisecond)
+
+	davidJob2, _ := db.CreateRelationship("WORKS_AT", david.ID, startup.ID)
+	db.SetRelationshipProperty(davidJob2.ID, "title", "Lead DevOps")
+	time.Sleep(100 * time.Millisecond)
+
+	// New collaboration relationship
+	collab1, _ := db.CreateRelationship("COLLABORATES", bob.ID, david.ID)
+	db.SetRelationshipProperty(collab1.ID, "project", "Platform")
+	time.Sleep(50 * time.Millisecond)
+
+	collab2, _ := db.CreateRelationship("COLLABORATES", eve.ID, bob.ID)
+	db.SetRelationshipProperty(collab2.ID, "project", "Product")
 }
