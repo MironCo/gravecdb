@@ -20,7 +20,7 @@ func NewAuthMiddleware(username, password string) *AuthMiddleware {
 	return &AuthMiddleware{
 		username: username,
 		password: password,
-		realm:    "graphdb",
+		realm:    "gravecdb",
 	}
 }
 

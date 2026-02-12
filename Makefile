@@ -2,12 +2,12 @@
 
 # Build the server binary
 build:
-	@cd server && go build -o ../graph-db main.go
-	@echo "Built graph-db binary in root directory"
+	@cd server && go build -o ../gravecdb main.go
+	@echo "Built gravecdb binary in root directory"
 
 # Build and run the server
 run: build
-	@./graph-db
+	@./gravecdb
 
 # Run the visualization server
 server:
@@ -59,5 +59,5 @@ demo-performance:
 
 # Clean build artifacts
 clean:
-	@rm -rf data/ graph-db web/dist examples/*/data*
+	@rm -rf data/ gravecdb web/dist examples/*/data*
 	@echo "Cleaned up data directory and binaries"

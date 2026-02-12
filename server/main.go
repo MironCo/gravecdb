@@ -23,18 +23,18 @@ func main() {
 
 	// Parse config from DSN environment variable or use defaults
 	// Examples:
-	//   GRAPHDB_DSN=graphdb:///data                     (persist to ./data, no auth)
-	//   GRAPHDB_DSN=graphdb://admin:secret@:8080/data   (with auth)
-	//   GRAPHDB_DSN=graphdb://admin:secret@:8080/data?embedder=ollama://localhost:11434
-	dsn := os.Getenv("GRAPHDB_DSN")
+	//   GRAVECDB_DSN=gravecdb:///data                     (persist to ./data, no auth)
+	//   GRAVECDB_DSN=gravecdb://admin:secret@:8080/data   (with auth)
+	//   GRAVECDB_DSN=gravecdb://admin:secret@:8080/data?embedder=ollama://localhost:11434
+	dsn := os.Getenv("GRAVECDB_DSN")
 	if dsn == "" {
-		dsn = "graphdb:///data" // Default: persist to ./data, no auth
+		dsn = "gravecdb:///data" // Default: persist to ./data, no auth
 	}
 
 	var err error
 	serverConfig, err = graph.ParseServerDSN(dsn)
 	if err != nil {
-		panic(fmt.Errorf("invalid GRAPHDB_DSN: %w", err))
+		panic(fmt.Errorf("invalid GRAVECDB_DSN: %w", err))
 	}
 
 	// Initialize the graph database
@@ -86,7 +86,7 @@ func main() {
 			}
 			// Require auth for API routes
 			if !auth.Authenticate(c.Request) {
-				c.Header("WWW-Authenticate", `Basic realm="graphdb"`)
+				c.Header("WWW-Authenticate", `Basic realm="gravecdb"`)
 				c.AbortWithStatus(http.StatusUnauthorized)
 				return
 			}

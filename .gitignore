@@ -5,7 +5,7 @@ data/
 .env
 
 # Build artifacts
-graph-db
+gravecdb
 
 # Frontend build
 web/dist/

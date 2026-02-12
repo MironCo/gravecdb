@@ -21,36 +21,36 @@ type Config struct {
 }
 
 // ParseDSN parses a connection string into a Config
-// Format: graphdb://[username:password@][host]/[datadir]?[options]
+// Format: gravecdb://[username:password@][host]/[datadir]?[options]
 //
 // Examples:
 //
-//	graphdb://                                    (in-memory, no auth)
-//	graphdb:///data                               (persist to ./data, no auth)
-//	graphdb://admin:secret@/data                  (persist to ./data, with auth)
-//	graphdb://admin:secret@/data?embedder=ollama://localhost:11434
-//	graphdb://:memory:                            (explicit in-memory)
+//	gravecdb://                                    (in-memory, no auth)
+//	gravecdb:///data                               (persist to ./data, no auth)
+//	gravecdb://admin:secret@/data                  (persist to ./data, with auth)
+//	gravecdb://admin:secret@/data?embedder=ollama://localhost:11434
+//	gravecdb://:memory:                            (explicit in-memory)
 //
 // Environment variables:
 //
-//	GRAPHDB_USERNAME - default username
-//	GRAPHDB_PASSWORD - default password
-//	GRAPHDB_DATA_DIR - default data directory
-//	EMBEDDER_URL     - default embedder URL
+//	GRAVECDB_USERNAME - default username
+//	GRAVECDB_PASSWORD - default password
+//	GRAVECDB_DATA_DIR - default data directory
+//	EMBEDDER_URL      - default embedder URL
 func ParseDSN(dsn string) (*Config, error) {
 	cfg := &Config{}
 
 	// Handle empty DSN
-	if dsn == "" || dsn == "graphdb://" {
+	if dsn == "" || dsn == "gravecdb://" {
 		return cfg, nil
 	}
 
 	// Parse scheme
-	if !strings.HasPrefix(dsn, "graphdb://") {
-		return nil, fmt.Errorf("invalid DSN: must start with graphdb://")
+	if !strings.HasPrefix(dsn, "gravecdb://") {
+		return nil, fmt.Errorf("invalid DSN: must start with gravecdb://")
 	}
 
-	rest := strings.TrimPrefix(dsn, "graphdb://")
+	rest := strings.TrimPrefix(dsn, "gravecdb://")
 
 	// Check for explicit in-memory
 	if rest == ":memory:" {
@@ -97,13 +97,13 @@ func ParseDSN(dsn string) (*Config, error) {
 
 	// Apply environment variable defaults
 	if cfg.Username == "" {
-		cfg.Username = os.Getenv("GRAPHDB_USERNAME")
+		cfg.Username = os.Getenv("GRAVECDB_USERNAME")
 	}
 	if cfg.Password == "" {
-		cfg.Password = os.Getenv("GRAPHDB_PASSWORD")
+		cfg.Password = os.Getenv("GRAVECDB_PASSWORD")
 	}
 	if cfg.DataDir == "" {
-		cfg.DataDir = os.Getenv("GRAPHDB_DATA_DIR")
+		cfg.DataDir = os.Getenv("GRAVECDB_DATA_DIR")
 	}
 	if cfg.EmbedderURL == "" {
 		cfg.EmbedderURL = os.Getenv("EMBEDDER_URL")
@@ -158,13 +158,13 @@ type ServerConfig struct {
 }
 
 // ParseServerDSN parses a server connection string
-// Format: graphdb://[username:password@][host][:port]/[datadir]?[options]
+// Format: gravecdb://[username:password@][host][:port]/[datadir]?[options]
 //
 // Examples:
 //
-//	graphdb://localhost:8080/data
-//	graphdb://admin:secret@0.0.0.0:8080/data
-//	graphdb://admin:secret@:8080/data?embedder=ollama://localhost:11434
+//	gravecdb://localhost:8080/data
+//	gravecdb://admin:secret@0.0.0.0:8080/data
+//	gravecdb://admin:secret@:8080/data?embedder=ollama://localhost:11434
 func ParseServerDSN(dsn string) (*ServerConfig, error) {
 	cfg := &ServerConfig{
 		Config: &Config{},
@@ -172,15 +172,15 @@ func ParseServerDSN(dsn string) (*ServerConfig, error) {
 		Port:   8080,
 	}
 
-	if dsn == "" || dsn == "graphdb://" {
+	if dsn == "" || dsn == "gravecdb://" {
 		return cfg, nil
 	}
 
-	if !strings.HasPrefix(dsn, "graphdb://") {
-		return nil, fmt.Errorf("invalid DSN: must start with graphdb://")
+	if !strings.HasPrefix(dsn, "gravecdb://") {
+		return nil, fmt.Errorf("invalid DSN: must start with gravecdb://")
 	}
 
-	rest := strings.TrimPrefix(dsn, "graphdb://")
+	rest := strings.TrimPrefix(dsn, "gravecdb://")
 
 	// Parse credentials if present
 	if strings.Contains(rest, "@") {
@@ -249,24 +249,24 @@ func ParseServerDSN(dsn string) (*ServerConfig, error) {
 
 	// Apply environment variable defaults
 	if cfg.Username == "" {
-		cfg.Username = os.Getenv("GRAPHDB_USERNAME")
+		cfg.Username = os.Getenv("GRAVECDB_USERNAME")
 	}
 	if cfg.Password == "" {
-		cfg.Password = os.Getenv("GRAPHDB_PASSWORD")
+		cfg.Password = os.Getenv("GRAVECDB_PASSWORD")
 	}
 	if cfg.DataDir == "" {
-		cfg.DataDir = os.Getenv("GRAPHDB_DATA_DIR")
+		cfg.DataDir = os.Getenv("GRAVECDB_DATA_DIR")
 	}
 	if cfg.EmbedderURL == "" {
 		cfg.EmbedderURL = os.Getenv("EMBEDDER_URL")
 	}
 	if cfg.Host == "localhost" {
-		if h := os.Getenv("GRAPHDB_HOST"); h != "" {
+		if h := os.Getenv("GRAVECDB_HOST"); h != "" {
 			cfg.Host = h
 		}
 	}
 	if cfg.Port == 8080 {
-		if p := os.Getenv("GRAPHDB_PORT"); p != "" {
+		if p := os.Getenv("GRAVECDB_PORT"); p != "" {
 			port, err := strconv.Atoi(p)
 			if err == nil {
 				cfg.Port = port
