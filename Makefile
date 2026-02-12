@@ -1,4 +1,4 @@
-.PHONY: build run server demo-basic demo-temporal demo-persistence demo-pathfinding demo-query demo-temporal-paths demo-client web-dev web-build clean
+.PHONY: build run server demo-basic demo-temporal demo-persistence demo-pathfinding demo-query demo-temporal-paths demo-client demo-performance web-dev web-build clean
 
 # Build the server binary
 build:
@@ -53,7 +53,11 @@ demo-temporal-paths:
 demo-client:
 	@cd examples/client-demo && go run main.go
 
+# Run the performance comparison demo
+demo-performance:
+	@cd examples/performance && go run main.go
+
 # Clean build artifacts
 clean:
-	@rm -rf data/ graph-db web/dist
+	@rm -rf data/ graph-db web/dist examples/*/data*
 	@echo "Cleaned up data directory and binaries"

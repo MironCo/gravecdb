@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -31,22 +32,59 @@ type Snapshot struct {
 // Every operation is first written to the log before being applied to the in-memory graph
 // This ensures durability - if the process crashes, we can replay the log to recover state
 type WAL struct {
-	logFile      *os.File    // The append-only log file where operations are written
-	logPath      string      // Path to the log file
-	snapshotPath string      // Path to the snapshot file
-	mu           sync.Mutex  // Protects concurrent writes to the log
+	logFile       *os.File        // The append-only log file where operations are written
+	logPath       string          // Path to the log file
+	snapshotPath  string          // Path to the snapshot file
+	mu            sync.Mutex      // Protects concurrent writes to the log
+	buffer        []Operation     // Buffer for batching operations
+	bufferSize    int             // Maximum buffer size before auto-flush
+	syncMode      SyncMode        // When to sync to disk
+	flushTimer    *time.Timer     // Timer for periodic flushes
+	flushInterval time.Duration   // Interval for timer (stored for hybrid mode resets)
+	flushChan     chan struct{}   // Channel to signal manual flush
+	closeChan     chan struct{}   // Channel to signal WAL shutdown
 }
 
-// NewWAL creates a new Write-Ahead Log instance
+// SyncMode controls when WAL writes are synced to disk
+type SyncMode int
+
+const (
+	// SyncEveryWrite syncs after every write (safest, slowest)
+	SyncEveryWrite SyncMode = iota
+	// SyncBatch syncs after each batch (balanced)
+	SyncBatch
+	// SyncPeriodic syncs periodically (fastest, less durable)
+	SyncPeriodic
+	// SyncHybrid syncs on batch full OR timeout (best balance)
+	SyncHybrid
+)
+
+// NewWAL creates a new Write-Ahead Log instance with default settings
 // dataDir: directory where log and snapshot files will be stored
 func NewWAL(dataDir string) (*WAL, error) {
+	return NewWALWithOptions(dataDir, WALOptions{
+		BufferSize:    100,                    // Batch up to 100 operations
+		SyncMode:      SyncHybrid,             // Sync on batch full OR timeout
+		FlushInterval: 100 * time.Millisecond, // Flush every 100ms if buffer not full
+	})
+}
+
+// WALOptions configures WAL behavior
+type WALOptions struct {
+	BufferSize    int           // Maximum operations to buffer before auto-flush
+	SyncMode      SyncMode      // When to sync to disk
+	FlushInterval time.Duration // How often to auto-flush (for SyncPeriodic and SyncHybrid)
+}
+
+// NewWALWithOptions creates a WAL with custom options
+func NewWALWithOptions(dataDir string, opts WALOptions) (*WAL, error) {
 	// Ensure the data directory exists
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
 
 	logPath := filepath.Join(dataDir, "wal.log")
-	snapshotPath := filepath.Join(dataDir, "snapshot.json")
+	snapshotPath := filepath.Join(dataDir, "snapshot.gob")
 
 	// Open log file in append mode - we never overwrite, only add new operations
 	// CREATE flag creates the file if it doesn't exist
@@ -55,11 +93,25 @@ func NewWAL(dataDir string) (*WAL, error) {
 		return nil, fmt.Errorf("failed to open WAL file: %w", err)
 	}
 
-	return &WAL{
-		logFile:      logFile,
-		logPath:      logPath,
-		snapshotPath: snapshotPath,
-	}, nil
+	wal := &WAL{
+		logFile:       logFile,
+		logPath:       logPath,
+		snapshotPath:  snapshotPath,
+		buffer:        make([]Operation, 0, opts.BufferSize),
+		bufferSize:    opts.BufferSize,
+		syncMode:      opts.SyncMode,
+		flushInterval: opts.FlushInterval,
+		flushChan:     make(chan struct{}, 1),
+		closeChan:     make(chan struct{}),
+	}
+
+	// Start background flusher for periodic and hybrid modes
+	if (opts.SyncMode == SyncPeriodic || opts.SyncMode == SyncHybrid) && opts.FlushInterval > 0 {
+		wal.flushTimer = time.NewTimer(opts.FlushInterval)
+		go wal.backgroundFlusher(opts.FlushInterval)
+	}
+
+	return wal, nil
 }
 
 // WriteOperation appends an operation to the log
@@ -71,25 +123,89 @@ func (w *WAL) WriteOperation(op Operation) error {
 	// Set the timestamp for this operation
 	op.Timestamp = time.Now()
 
-	// Serialize the operation to JSON
-	// Each operation is written as a single line (newline-delimited JSON)
-	data, err := json.Marshal(op)
-	if err != nil {
-		return fmt.Errorf("failed to marshal operation: %w", err)
+	// Add to buffer
+	w.buffer = append(w.buffer, op)
+
+	// Check if we should flush based on sync mode
+	switch w.syncMode {
+	case SyncEveryWrite:
+		// Flush immediately for maximum durability
+		return w.flushUnlocked()
+	case SyncBatch:
+		// Flush when buffer is full
+		if len(w.buffer) >= w.bufferSize {
+			return w.flushUnlocked()
+		}
+		return nil
+	case SyncPeriodic:
+		// Let background flusher handle it
+		return nil
+	case SyncHybrid:
+		// Reset the timer on each write (inactivity timer)
+		if w.flushTimer != nil {
+			w.flushTimer.Reset(w.flushInterval)
+		}
+		// Flush when buffer is full
+		if len(w.buffer) >= w.bufferSize {
+			return w.flushUnlocked()
+		}
+		return nil
+	default:
+		return w.flushUnlocked()
+	}
+}
+
+// Flush forces all buffered operations to be written to disk
+func (w *WAL) Flush() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.flushUnlocked()
+}
+
+// flushUnlocked writes all buffered operations to disk (caller must hold lock)
+func (w *WAL) flushUnlocked() error {
+	if len(w.buffer) == 0 {
+		return nil
 	}
 
-	// Append the operation to the log file with a newline separator
-	if _, err := w.logFile.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("failed to write operation to WAL: %w", err)
+	// Write all buffered operations
+	for _, op := range w.buffer {
+		data, err := json.Marshal(op)
+		if err != nil {
+			return fmt.Errorf("failed to marshal operation: %w", err)
+		}
+
+		if _, err := w.logFile.Write(append(data, '\n')); err != nil {
+			return fmt.Errorf("failed to write operation to WAL: %w", err)
+		}
 	}
 
-	// Force the OS to flush the data to disk immediately
-	// This ensures durability - the operation is not considered committed until it's on disk
+	// Sync to disk once for the entire batch
 	if err := w.logFile.Sync(); err != nil {
 		return fmt.Errorf("failed to sync WAL: %w", err)
 	}
 
+	// Clear the buffer
+	w.buffer = w.buffer[:0]
 	return nil
+}
+
+// backgroundFlusher periodically flushes the buffer
+func (w *WAL) backgroundFlusher(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			w.Flush()
+		case <-w.flushChan:
+			w.Flush()
+		case <-w.closeChan:
+			w.Flush() // Final flush before closing
+			return
+		}
+	}
 }
 
 // CreateSnapshot saves the entire graph state to disk
@@ -102,18 +218,27 @@ func (w *WAL) CreateSnapshot(snapshot *Snapshot) error {
 	// Set the snapshot timestamp
 	snapshot.Timestamp = time.Now()
 
-	// Serialize the entire graph state to JSON
-	data, err := json.MarshalIndent(snapshot, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal snapshot: %w", err)
-	}
-
 	// Write to a temporary file first, then atomically rename
 	// This ensures we never have a partial/corrupted snapshot
 	tempPath := w.snapshotPath + ".tmp"
-	if err := os.WriteFile(tempPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write snapshot: %w", err)
+	file, err := os.Create(tempPath)
+	if err != nil {
+		return fmt.Errorf("failed to create snapshot file: %w", err)
 	}
+	defer file.Close()
+
+	// Serialize the entire graph state using Gob (binary format)
+	encoder := gob.NewEncoder(file)
+	if err := encoder.Encode(snapshot); err != nil {
+		return fmt.Errorf("failed to encode snapshot: %w", err)
+	}
+
+	// Sync to disk before renaming
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("failed to sync snapshot: %w", err)
+	}
+
+	file.Close()
 
 	// Atomic rename - if this succeeds, the snapshot is valid
 	if err := os.Rename(tempPath, w.snapshotPath); err != nil {
@@ -131,16 +256,18 @@ func (w *WAL) LoadSnapshot() (*Snapshot, error) {
 		return nil, nil // No snapshot yet, return nil (not an error)
 	}
 
-	// Read the snapshot file
-	data, err := os.ReadFile(w.snapshotPath)
+	// Open the snapshot file
+	file, err := os.Open(w.snapshotPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read snapshot: %w", err)
+		return nil, fmt.Errorf("failed to open snapshot: %w", err)
 	}
+	defer file.Close()
 
-	// Deserialize the snapshot
+	// Deserialize the snapshot using Gob
 	var snapshot Snapshot
-	if err := json.Unmarshal(data, &snapshot); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal snapshot: %w", err)
+	decoder := gob.NewDecoder(file)
+	if err := decoder.Decode(&snapshot); err != nil {
+		return nil, fmt.Errorf("failed to decode snapshot: %w", err)
 	}
 
 	return &snapshot, nil
@@ -203,11 +330,17 @@ func (w *WAL) TruncateLog() error {
 
 // Close closes the WAL and flushes any pending writes
 func (w *WAL) Close() error {
+	// Signal background flusher to stop
+	if w.closeChan != nil {
+		close(w.closeChan)
+	}
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if err := w.logFile.Sync(); err != nil {
-		return fmt.Errorf("failed to sync WAL: %w", err)
+	// Flush any remaining buffered operations
+	if err := w.flushUnlocked(); err != nil {
+		return err
 	}
 
 	if err := w.logFile.Close(); err != nil {

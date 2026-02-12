@@ -116,6 +116,14 @@ func main() {
 	// Performance benchmark
 	fmt.Println("\n=== Performance Benchmark ===\n")
 	runPerformanceBenchmark(db)
+
+	// Create a snapshot
+	fmt.Println("\n=== Creating Snapshot ===")
+	if err := db.Snapshot(); err != nil {
+		fmt.Printf("Error creating snapshot: %v\n", err)
+	} else {
+		fmt.Println("Snapshot created successfully!")
+	}
 }
 
 func setupDemoDataViaQueries(db *graph.Graph) {

@@ -27,8 +27,9 @@ func NewGraph() *Graph {
 // NewGraphWithPersistence creates a new graph database with disk persistence
 // dataDir: directory where the database files (WAL and snapshots) will be stored
 // If a previous database exists in dataDir, it will be recovered automatically
+// Uses default settings (balanced performance and durability)
 func NewGraphWithPersistence(dataDir string) (*Graph, error) {
-	// Create the WAL instance
+	// Create the WAL instance with default settings
 	wal, err := NewWAL(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create WAL: %w", err)
@@ -42,6 +43,57 @@ func NewGraphWithPersistence(dataDir string) (*Graph, error) {
 	}
 
 	// Attempt to recover from disk
+	if err := g.recover(); err != nil {
+		return nil, fmt.Errorf("failed to recover graph: %w", err)
+	}
+
+	return g, nil
+}
+
+// NewGraphWithMaxDurability creates a graph with maximum durability (slow writes)
+// Every write is immediately synced to disk - safest but slowest option
+func NewGraphWithMaxDurability(dataDir string) (*Graph, error) {
+	wal, err := NewWALWithOptions(dataDir, WALOptions{
+		BufferSize: 1,
+		SyncMode:   SyncEveryWrite,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create WAL: %w", err)
+	}
+
+	g := &Graph{
+		nodes:         make(map[string]*Node),
+		relationships: make(map[string]*Relationship),
+		nodesByLabel:  make(map[string]map[string]*Node),
+		wal:           wal,
+	}
+
+	if err := g.recover(); err != nil {
+		return nil, fmt.Errorf("failed to recover graph: %w", err)
+	}
+
+	return g, nil
+}
+
+// NewGraphWithMaxPerformance creates a graph optimized for write performance
+// Batches writes and syncs periodically - fastest but may lose recent writes on crash
+func NewGraphWithMaxPerformance(dataDir string) (*Graph, error) {
+	wal, err := NewWALWithOptions(dataDir, WALOptions{
+		BufferSize:    1000, // Large buffer
+		SyncMode:      SyncPeriodic,
+		FlushInterval: 1 * time.Second, // Sync every second
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create WAL: %w", err)
+	}
+
+	g := &Graph{
+		nodes:         make(map[string]*Node),
+		relationships: make(map[string]*Relationship),
+		nodesByLabel:  make(map[string]map[string]*Node),
+		wal:           wal,
+	}
+
 	if err := g.recover(); err != nil {
 		return nil, fmt.Errorf("failed to recover graph: %w", err)
 	}
