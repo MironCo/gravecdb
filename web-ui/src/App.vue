@@ -103,53 +103,60 @@ function initCytoscape() {
       {
         selector: 'node',
         style: {
-          'background-color': '#81C784',
+          'background-color': '#FFFFFF',
           'label': 'data(label)',
-          'color': '#1B5E20',
+          'color': '#000000',
           'text-valign': 'center',
           'text-halign': 'center',
-          'font-size': '12px',
+          'font-size': '10px',
           'font-weight': '500',
-          'font-family': 'Roboto, sans-serif',
+          'font-family': 'Noto Sans, sans-serif',
           'width': 60,
           'height': 60,
-          'border-width': 2,
-          'border-color': '#4CAF50'
+          'border-width': 1,
+          'border-color': '#FFFFFF',
+          'shape': 'ellipse',
+          'text-wrap': 'wrap',
+          'text-max-width': '42px'
         }
       },
       {
         selector: 'node[type="Company"]',
         style: {
-          'background-color': '#FFB74D',
+          'background-color': '#1A1A1A',
           'shape': 'roundrectangle',
-          'border-color': '#FF9800'
+          'border-color': '#FFFFFF',
+          'color': '#FFFFFF',
+          'text-wrap': 'wrap',
+          'text-max-width': '45px'
         }
       },
       {
         selector: 'node.deleted',
         style: {
-          'background-color': '#E0E0E0',
-          'opacity': 0.5,
-          'border-width': 2,
-          'border-color': '#EF5350',
-          'border-style': 'dashed'
+          'background-color': '#404040',
+          'opacity': 0.4,
+          'border-width': 1,
+          'border-color': '#808080',
+          'border-style': 'dashed',
+          'color': '#808080'
         }
       },
       {
         selector: 'edge',
         style: {
-          'width': 2,
-          'line-color': '#90CAF9',
-          'target-arrow-color': '#90CAF9',
+          'width': 1.5,
+          'line-color': '#D0D0D0',
+          'target-arrow-color': '#D0D0D0',
           'target-arrow-shape': 'triangle',
           'curve-style': 'bezier',
           'label': 'data(label)',
           'font-size': '10px',
           'font-weight': '400',
-          'color': '#546E7A',
-          'font-family': 'Roboto, sans-serif',
+          'color': '#C0C0C0',
+          'font-family': 'JetBrains Mono, monospace',
           'text-background-opacity': 1,
-          'text-background-color': '#FFFFFF',
+          'text-background-color': '#000000',
           'text-background-padding': '3px',
           'text-background-shape': 'roundrectangle'
         }
@@ -157,9 +164,9 @@ function initCytoscape() {
       {
         selector: 'edge.deleted',
         style: {
-          'line-color': '#EF5350',
-          'target-arrow-color': '#EF5350',
-          'opacity': 0.4,
+          'line-color': '#707070',
+          'target-arrow-color': '#707070',
+          'opacity': 0.3,
           'line-style': 'dashed'
         }
       }
@@ -289,8 +296,8 @@ watch(playbackSpeed, () => {
         <div class="title-group">
           <div class="logo-icon">
             <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
-              <circle cx="20" cy="20" r="18" stroke="#4CAF50" stroke-width="2" fill="none"/>
-              <path d="M20 8 L20 20 L28 20" stroke="#4CAF50" stroke-width="2" stroke-linecap="round"/>
+              <circle cx="20" cy="20" r="18" stroke="#FFFFFF" stroke-width="2" fill="none"/>
+              <path d="M20 8 L20 20 L28 20" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
             </svg>
           </div>
           <div>
@@ -463,8 +470,8 @@ watch(playbackSpeed, () => {
 
         <div class="empty-state" v-else>
           <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
-            <circle cx="32" cy="32" r="28" stroke="#E0E0E0" stroke-width="2" stroke-dasharray="4 4"/>
-            <circle cx="32" cy="32" r="4" fill="#BDBDBD"/>
+            <circle cx="32" cy="32" r="28" stroke="#808080" stroke-width="2" stroke-dasharray="4 4"/>
+            <circle cx="32" cy="32" r="4" fill="#808080"/>
           </svg>
           <p>Select a node to view details</p>
         </div>
@@ -474,23 +481,21 @@ watch(playbackSpeed, () => {
 </template>
 
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@300;400;500;700&family=JetBrains+Mono:wght@300;400;500;700&display=swap');
 
 :root {
-  --primary: #4CAF50;
-  --primary-light: #81C784;
-  --primary-dark: #388E3C;
-  --secondary: #2196F3;
-  --secondary-light: #90CAF9;
-  --accent: #FF9800;
-  --accent-light: #FFB74D;
-  --error: #EF5350;
-  --surface: #FFFFFF;
-  --background: #F5F5F5;
-  --on-surface: #212121;
-  --on-surface-variant: #757575;
-  --outline: #E0E0E0;
-  --shadow: rgba(0, 0, 0, 0.12);
+  --primary: #FFFFFF;
+  --primary-dark: #E0E0E0;
+  --secondary: #808080;
+  --accent: #000000;
+  --error: #FFFFFF;
+  --surface: #000000;
+  --surface-elevated: #1A1A1A;
+  --background: #0A0A0A;
+  --on-surface: #FFFFFF;
+  --on-surface-variant: #B0B0B0;
+  --outline: #333333;
+  --shadow: none;
 }
 
 * {
@@ -508,10 +513,11 @@ html, body {
 }
 
 body {
-  font-family: 'Roboto', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: 'Noto Sans', -apple-system, BlinkMacSystemFont, sans-serif;
   background: var(--background);
   color: var(--on-surface);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 #app {
@@ -555,9 +561,10 @@ body {
 
 header {
   background: var(--surface);
-  box-shadow: 0 2px 4px var(--shadow);
+  box-shadow: 0 1px 0 var(--outline);
   position: relative;
   z-index: 10;
+  border-bottom: 1px solid var(--outline);
 }
 
 .header-content {
@@ -792,7 +799,11 @@ select:focus {
 
 #cy {
   flex: 1;
-  background: #FAFAFA;
+  background: #0D0D0D;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 20px 20px;
 }
 
 .sidebar {
@@ -822,12 +833,12 @@ select:focus {
 }
 
 .stats-card, .node-details-card {
-  background: var(--surface);
+  background: var(--surface-elevated);
   border: 1px solid var(--outline);
   border-radius: 8px;
   padding: 20px;
   margin-bottom: 16px;
-  box-shadow: 0 1px 3px var(--shadow);
+  box-shadow: none;
 }
 
 .card-title {
@@ -852,14 +863,16 @@ select:focus {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   padding: 4px 12px;
-  background: var(--primary-light);
-  color: var(--primary-dark);
+  background: transparent;
+  color: var(--primary);
   border-radius: 12px;
+  border: 1px solid var(--primary);
 }
 
 .node-status.deleted {
-  background: #FFCDD2;
-  color: #C62828;
+  background: transparent;
+  color: var(--secondary);
+  border-color: var(--secondary);
 }
 
 .stats-grid {
@@ -920,7 +933,8 @@ select:focus {
 }
 
 .property-item:hover {
-  background: #E8F5E9;
+  background: var(--surface-elevated);
+  border-left-color: var(--primary);
 }
 
 .property-label {
@@ -943,12 +957,13 @@ select:focus {
 }
 
 .tag {
-  background: var(--primary-light);
-  color: var(--primary-dark);
+  background: transparent;
+  color: var(--primary);
   padding: 4px 12px;
   font-size: 12px;
   font-weight: 500;
   border-radius: 16px;
+  border: 1px solid var(--outline);
 }
 
 .section-title {
@@ -976,8 +991,9 @@ select:focus {
 }
 
 .relationship-item:hover {
-  background: #E3F2FD;
+  background: var(--surface-elevated);
   transform: translateX(4px);
+  border-left-color: var(--secondary);
 }
 
 .relationship-item.deleted {
