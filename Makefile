@@ -2,7 +2,7 @@
 
 # Build the server binary
 build:
-	@cd server && go build -o ../gravecdb main.go
+	@cd server && go build -o ../gravecdb .
 	@echo "Built gravecdb binary in root directory"
 
 # Build and run the server
@@ -11,7 +11,7 @@ run: build
 
 # Run the visualization server
 server:
-	@cd server && go run main.go
+	@cd server && go run .
 
 # Run the frontend dev server
 web-dev:

@@ -458,6 +458,24 @@ watch(playbackSpeed, () => {
             </div>
           </div>
 
+          <div v-if="selectedNode.embedding" class="embedding-section">
+            <h4 class="section-title">Vector Embedding</h4>
+            <div class="embedding-info">
+              <div class="embedding-item">
+                <span class="embedding-label">Model</span>
+                <span class="embedding-value">{{ selectedNode.embedding.model }}</span>
+              </div>
+              <div class="embedding-item">
+                <span class="embedding-label">Dimensions</span>
+                <span class="embedding-value">{{ selectedNode.embedding.dimensions }}</span>
+              </div>
+              <div class="embedding-item">
+                <span class="embedding-label">Created</span>
+                <span class="embedding-value">{{ new Date(selectedNode.embedding.validFrom).toLocaleString() }}</span>
+              </div>
+            </div>
+          </div>
+
           <div v-if="selectedNodeRelationships.length > 0" class="relationships-section">
             <h4 class="section-title">Relationships</h4>
             <div
@@ -1061,6 +1079,41 @@ select:focus {
   padding-bottom: 8px;
   border-bottom: 1px solid var(--outline);
   letter-spacing: 0.5px;
+}
+
+.embedding-section {
+  margin-top: 20px;
+}
+
+.embedding-info {
+  background: var(--background);
+  padding: 16px;
+  border-radius: 4px;
+  border-left: 3px solid #4CAF50;
+}
+
+.embedding-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+}
+
+.embedding-item:not(:last-child) {
+  border-bottom: 1px solid var(--outline);
+}
+
+.embedding-label {
+  font-size: 12px;
+  color: var(--on-surface-variant);
+  font-weight: 500;
+}
+
+.embedding-value {
+  font-size: 13px;
+  color: var(--primary);
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 500;
 }
 
 .relationships-section {
