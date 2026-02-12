@@ -12,6 +12,7 @@ type Query struct {
 	MatchPattern *MatchPattern
 	WhereClause  *WhereClause
 	ReturnClause *ReturnClause
+	IsPathQuery  bool // true if this is a shortestPath() query
 }
 
 // MatchPattern represents a graph pattern to match
@@ -19,6 +20,17 @@ type Query struct {
 type MatchPattern struct {
 	Nodes         []NodePattern
 	Relationships []RelPattern
+	PathFunction  *PathFunction // for shortestPath() queries
+}
+
+// PathFunction represents a path-finding function call
+type PathFunction struct {
+	Function     string       // "shortestPath" or "allShortestPaths"
+	Variable     string       // variable name for the path (e.g., "path" in "path = shortestPath(...)")
+	StartPattern NodePattern  // starting node pattern
+	EndPattern   NodePattern  // ending node pattern
+	RelTypes     []string     // relationship types filter (empty = any type)
+	MaxDepth     int          // max depth for variable-length paths (0 = unlimited)
 }
 
 // NodePattern represents a node in the pattern
@@ -71,6 +83,7 @@ type QueryResult struct {
 //   MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE a.name = "Alice" RETURN a, b
 //   MATCH (p:Person) WHERE p.age > 25 RETURN p.name
 //   MATCH (a)-[:WORKS_AT]->(c:Company) RETURN a.name, c.name
+//   MATCH path = shortestPath((a:Person)-[*]-(b:Person)) WHERE a.name = "Alice" AND b.name = "David" RETURN path
 func ParseQuery(queryStr string) (*Query, error) {
 	queryStr = strings.TrimSpace(queryStr)
 
@@ -85,6 +98,13 @@ func ParseQuery(queryStr string) (*Query, error) {
 	}
 
 	query := &Query{}
+
+	// Check if this is a path query (contains shortestPath or allShortestPaths)
+	matchStr := matchMatch[1]
+	if strings.Contains(strings.ToLower(matchStr), "shortestpath") ||
+	   strings.Contains(strings.ToLower(matchStr), "allshortestpaths") {
+		query.IsPathQuery = true
+	}
 
 	// Parse MATCH clause
 	matchPattern, err := parseMatchPattern(matchMatch[1])
@@ -119,16 +139,31 @@ func ParseQuery(queryStr string) (*Query, error) {
 
 // parseMatchPattern parses the MATCH pattern
 // Example: (a:Person)-[:KNOWS]->(b:Person)
+// Example: path = shortestPath((a:Person)-[*]-(b:Person))
 func parseMatchPattern(pattern string) (*MatchPattern, error) {
 	pattern = strings.TrimSpace(pattern)
-
-	// Simple pattern parser - supports basic node-relationship-node patterns
-	// Pattern: (node)-[relationship]->(node) or (node)<-[relationship]-(node) or (node)-[relationship]-(node)
 
 	mp := &MatchPattern{
 		Nodes:         []NodePattern{},
 		Relationships: []RelPattern{},
 	}
+
+	// Check if this is a path function call
+	pathFuncRegex := regexp.MustCompile(`(?i)([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(shortestPath|allShortestPaths)\s*\(\s*(.+)\s*\)`)
+	pathFuncMatch := pathFuncRegex.FindStringSubmatch(pattern)
+
+	if pathFuncMatch != nil {
+		// Parse path function
+		pathFunc, err := parsePathFunction(pathFuncMatch[1], pathFuncMatch[2], pathFuncMatch[3])
+		if err != nil {
+			return nil, err
+		}
+		mp.PathFunction = pathFunc
+		return mp, nil
+	}
+
+	// Simple pattern parser - supports basic node-relationship-node patterns
+	// Pattern: (node)-[relationship]->(node) or (node)<-[relationship]-(node) or (node)-[relationship]-(node)
 
 	// Find all node patterns: (variable:Label)
 	nodeRegex := regexp.MustCompile(`\(([a-zA-Z_][a-zA-Z0-9_]*)?(?::([a-zA-Z_][a-zA-Z0-9_]*))?\)`)
@@ -185,6 +220,64 @@ func parseMatchPattern(pattern string) (*MatchPattern, error) {
 	}
 
 	return mp, nil
+}
+
+// parsePathFunction parses a path function like shortestPath((a:Person)-[*]-(b:Person))
+func parsePathFunction(variable, function, innerPattern string) (*PathFunction, error) {
+	innerPattern = strings.TrimSpace(innerPattern)
+
+	pf := &PathFunction{
+		Variable: variable,
+		Function: strings.ToLower(function),
+	}
+
+	// Parse the inner pattern: (start)-[*|*1..5|:TYPE*]-(end)
+	// Extract start and end node patterns
+	nodeRegex := regexp.MustCompile(`\(([a-zA-Z_][a-zA-Z0-9_]*)?(?::([a-zA-Z_][a-zA-Z0-9_]*))?\)`)
+	nodeMatches := nodeRegex.FindAllStringSubmatch(innerPattern, -1)
+
+	if len(nodeMatches) < 2 {
+		return nil, fmt.Errorf("path function requires start and end nodes")
+	}
+
+	// Parse start node
+	pf.StartPattern = NodePattern{
+		Variable: nodeMatches[0][1],
+		Labels:   []string{},
+	}
+	if nodeMatches[0][2] != "" {
+		pf.StartPattern.Labels = append(pf.StartPattern.Labels, nodeMatches[0][2])
+	}
+
+	// Parse end node
+	pf.EndPattern = NodePattern{
+		Variable: nodeMatches[1][1],
+		Labels:   []string{},
+	}
+	if nodeMatches[1][2] != "" {
+		pf.EndPattern.Labels = append(pf.EndPattern.Labels, nodeMatches[1][2])
+	}
+
+	// Parse variable-length relationship: -[*]-, -[*1..5]-, -[:TYPE*]-, etc.
+	varLenRelRegex := regexp.MustCompile(`-\[(?::([a-zA-Z_][a-zA-Z0-9_|]*))?\*(?:(\d+)\.\.(\d+))?\]-`)
+	varLenMatch := varLenRelRegex.FindStringSubmatch(innerPattern)
+
+	if varLenMatch != nil {
+		// Extract relationship types
+		if varLenMatch[1] != "" {
+			pf.RelTypes = strings.Split(varLenMatch[1], "|")
+		}
+
+		// Extract max depth (if specified)
+		if varLenMatch[3] != "" {
+			maxDepth, err := strconv.Atoi(varLenMatch[3])
+			if err == nil {
+				pf.MaxDepth = maxDepth
+			}
+		}
+	}
+
+	return pf, nil
 }
 
 // parseWhereClause parses the WHERE conditions

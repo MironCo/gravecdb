@@ -10,6 +10,11 @@ func (g *Graph) ExecuteQuery(query *Query) (*QueryResult, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
+	// Check if this is a path-finding query
+	if query.IsPathQuery && query.MatchPattern.PathFunction != nil {
+		return g.executePathQuery(query)
+	}
+
 	// Find all matches for the pattern
 	matches := g.findMatches(query.MatchPattern)
 
@@ -348,4 +353,94 @@ func (g *Graph) buildResult(matches []Match, returnClause *ReturnClause) *QueryR
 	}
 
 	return result
+}
+
+// executePathQuery executes a path-finding query
+func (g *Graph) executePathQuery(query *Query) (*QueryResult, error) {
+	pf := query.MatchPattern.PathFunction
+
+	// Find all candidate start nodes
+	startCandidates := g.getCandidateNodes(pf.StartPattern)
+	endCandidates := g.getCandidateNodes(pf.EndPattern)
+
+	// Apply WHERE filters to start/end nodes if specified
+	var filteredStartNodes []*Node
+	var filteredEndNodes []*Node
+
+	if query.WhereClause != nil {
+		// Split conditions by variable to filter start and end nodes separately
+		for _, startNode := range startCandidates {
+			match := Match{pf.StartPattern.Variable: startNode}
+			satisfies := true
+			for _, cond := range query.WhereClause.Conditions {
+				if cond.Variable == pf.StartPattern.Variable {
+					if !g.evaluateCondition(match, cond) {
+						satisfies = false
+						break
+					}
+				}
+			}
+			if satisfies {
+				filteredStartNodes = append(filteredStartNodes, startNode)
+			}
+		}
+		for _, endNode := range endCandidates {
+			match := Match{pf.EndPattern.Variable: endNode}
+			satisfies := true
+			for _, cond := range query.WhereClause.Conditions {
+				if cond.Variable == pf.EndPattern.Variable {
+					if !g.evaluateCondition(match, cond) {
+						satisfies = false
+						break
+					}
+				}
+			}
+			if satisfies {
+				filteredEndNodes = append(filteredEndNodes, endNode)
+			}
+		}
+	} else {
+		filteredStartNodes = startCandidates
+		filteredEndNodes = endCandidates
+	}
+
+	// Find paths between filtered nodes
+	var allPaths []*Path
+
+	for _, startNode := range filteredStartNodes {
+		for _, endNode := range filteredEndNodes {
+			if startNode.ID == endNode.ID {
+				continue // Skip same node
+			}
+
+			if pf.Function == "shortestpath" {
+				path := g.ShortestPath(startNode.ID, endNode.ID)
+				if path != nil {
+					allPaths = append(allPaths, path)
+				}
+			} else if pf.Function == "allshortestpaths" {
+				maxDepth := pf.MaxDepth
+				if maxDepth == 0 {
+					maxDepth = 10 // Default max depth to prevent infinite searches
+				}
+				paths := g.AllPaths(startNode.ID, endNode.ID, maxDepth)
+				allPaths = append(allPaths, paths...)
+			}
+		}
+	}
+
+	// Build result
+	result := &QueryResult{
+		Columns: []string{pf.Variable},
+		Rows:    []map[string]interface{}{},
+	}
+
+	for _, path := range allPaths {
+		row := map[string]interface{}{
+			pf.Variable: path,
+		}
+		result.Rows = append(result.Rows, row)
+	}
+
+	return result, nil
 }
