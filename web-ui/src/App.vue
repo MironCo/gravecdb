@@ -12,6 +12,8 @@ const isPlaying = ref(false)
 const playbackSpeed = ref(1)
 const playbackInterval = ref(null)
 const isLoaded = ref(false)
+const isGraphLoading = ref(true)
+const loadGraphTimeout = ref(null)
 
 const currentTimeDisplay = computed(() => {
   if (timelineEvents.value.length === 0) return 'No data'
@@ -77,6 +79,8 @@ async function loadTimeline() {
 }
 
 async function loadGraph() {
+  isGraphLoading.value = true
+
   if (currentTimeIndex.value >= timelineEvents.value.length) {
     currentTimeIndex.value = timelineEvents.value.length - 1
   }
@@ -198,9 +202,11 @@ function renderGraph() {
   if (!cy.value) return
 
   const elements = []
+  const nodeIds = new Set()
 
   graphData.value.nodes.forEach(node => {
     const label = node.properties.name || node.labels[0] || 'Node'
+    nodeIds.add(node.id)
     elements.push({
       group: 'nodes',
       data: {
@@ -213,31 +219,59 @@ function renderGraph() {
     })
   })
 
+  // Only add edges if both source and target nodes exist
   graphData.value.relationships.forEach(rel => {
-    elements.push({
-      group: 'edges',
-      data: {
-        id: rel.id,
-        source: rel.from,
-        target: rel.to,
-        label: rel.type,
-        deleted: !!rel.validTo
-      },
-      classes: rel.validTo ? 'deleted' : ''
-    })
+    if (nodeIds.has(rel.from) && nodeIds.has(rel.to)) {
+      elements.push({
+        group: 'edges',
+        data: {
+          id: rel.id,
+          source: rel.from,
+          target: rel.to,
+          label: rel.type,
+          deleted: !!rel.validTo
+        },
+        classes: rel.validTo ? 'deleted' : ''
+      })
+    }
   })
 
   cy.value.elements().remove()
   cy.value.add(elements)
-  cy.value.layout({
+
+  // If no elements, just clear loading state
+  if (elements.length === 0) {
+    isGraphLoading.value = false
+    return
+  }
+
+  // Hide elements while layout calculates
+  cy.value.elements().style('opacity', 0)
+
+  const layout = cy.value.layout({
     name: 'cose',
-    animate: true,
-    animationDuration: 300
-  }).run()
+    animate: false
+  })
+  layout.on('layoutstop', () => {
+    // Fade in elements after layout is done
+    cy.value.elements().animate({
+      style: { opacity: 1 },
+      duration: 200,
+      easing: 'ease-out'
+    })
+    isGraphLoading.value = false
+  })
+  layout.run()
 }
 
-async function onTimeSliderChange() {
-  await loadGraph()
+function onTimeSliderChange() {
+  isGraphLoading.value = true
+  if (loadGraphTimeout.value) {
+    clearTimeout(loadGraphTimeout.value)
+  }
+  loadGraphTimeout.value = setTimeout(() => {
+    loadGraph()
+  }, 150)
 }
 
 function togglePlayback() {
@@ -283,7 +317,11 @@ function jumpToEnd() {
 
 watch(playbackSpeed, () => {
   if (isPlaying.value) {
-    stopPlayback()
+    // Clear interval without changing isPlaying state
+    if (playbackInterval.value) {
+      clearInterval(playbackInterval.value)
+      playbackInterval.value = null
+    }
     startPlayback()
   }
 })
@@ -325,7 +363,7 @@ watch(playbackSpeed, () => {
               type="range"
               :min="0"
               :max="timelineEvents.length - 1"
-              v-model="currentTimeIndex"
+              v-model.number="currentTimeIndex"
               @input="onTimeSliderChange"
             />
           </div>
@@ -367,7 +405,13 @@ watch(playbackSpeed, () => {
     </div>
 
     <div class="container">
-      <div id="cy"></div>
+      <div class="graph-wrapper">
+        <div id="cy"></div>
+        <div v-if="isGraphLoading" class="loading-overlay">
+          <div class="spinner"></div>
+          <span class="loading-text">Loading graph...</span>
+        </div>
+      </div>
 
       <div class="sidebar">
         <div class="stats-card">
@@ -797,6 +841,12 @@ select:focus {
   position: relative;
 }
 
+.graph-wrapper {
+  flex: 1;
+  position: relative;
+  display: flex;
+}
+
 #cy {
   flex: 1;
   background: #0D0D0D;
@@ -804,6 +854,42 @@ select:focus {
     linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
   background-size: 20px 20px;
+}
+
+.loading-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(13, 13, 13, 0.85);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  z-index: 5;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--outline);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.loading-text {
+  color: var(--on-surface-variant);
+  font-size: 14px;
+  font-weight: 400;
 }
 
 .sidebar {

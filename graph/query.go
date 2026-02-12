@@ -9,15 +9,33 @@ import (
 
 // Query represents a parsed Cypher-like query
 type Query struct {
-	QueryType    string        // "MATCH", "CREATE", "DELETE"
-	MatchPattern *MatchPattern
-	CreateClause *CreateClause
-	SetClause    *SetClause
-	DeleteClause *DeleteClause
-	WhereClause  *WhereClause
-	ReturnClause *ReturnClause
-	TimeClause   *TimeClause   // Optional temporal constraint
-	IsPathQuery  bool          // true if this is a shortestPath() query
+	QueryType       string           // "MATCH", "CREATE", "DELETE"
+	MatchPattern    *MatchPattern
+	CreateClause    *CreateClause
+	SetClause       *SetClause
+	DeleteClause    *DeleteClause
+	WhereClause     *WhereClause
+	ReturnClause    *ReturnClause
+	TimeClause      *TimeClause      // Optional temporal constraint
+	EmbedClause     *EmbedClause     // Optional embedding generation
+	SimilarToClause *SimilarToClause // Optional semantic search
+	IsPathQuery     bool             // true if this is a shortestPath() query
+}
+
+// EmbedClause represents an EMBED operation for generating embeddings
+type EmbedClause struct {
+	Variable string    // The node variable to embed (e.g., "p" in "EMBED p")
+	Mode     string    // "AUTO", "TEXT", "PROPERTY"
+	Text     string    // Literal text (when Mode == "TEXT")
+	Property string    // Property name (when Mode == "PROPERTY")
+}
+
+// SimilarToClause represents a SIMILAR TO semantic search
+type SimilarToClause struct {
+	Variable   string  // The node variable to search (e.g., "p" in "(p:Person)")
+	QueryText  string  // The search query text
+	Limit      int     // Max results (0 = no limit)
+	Threshold  float32 // Min similarity threshold (0 = no threshold)
 }
 
 // TimeClause represents temporal query constraints
@@ -158,11 +176,13 @@ func parseMatchQuery(queryStr string) (*Query, error) {
 	query := &Query{QueryType: "MATCH"}
 
 	// Split into clauses
-	matchRegex := regexp.MustCompile(`(?i)MATCH\s+(.+?)(?:\s+WHERE\s+|\s+AT\s+TIME\s+|\s+SET\s+|\s+DELETE\s+|\s+RETURN\s+|$)`)
-	whereRegex := regexp.MustCompile(`(?i)WHERE\s+(.+?)(?:\s+AT\s+TIME\s+|\s+SET\s+|\s+DELETE\s+|\s+RETURN\s+|$)`)
-	timeRegex := regexp.MustCompile(`(?i)AT\s+TIME\s+(EARLIEST|(\d+))(?:\s+SET\s+|\s+DELETE\s+|\s+RETURN\s+|$)`)
-	setRegex := regexp.MustCompile(`(?i)SET\s+(.+?)(?:\s+RETURN\s+|$)`)
-	deleteRegex := regexp.MustCompile(`(?i)(DETACH\s+)?DELETE\s+(.+?)(?:\s+RETURN\s+|$)`)
+	matchRegex := regexp.MustCompile(`(?i)MATCH\s+(.+?)(?:\s+WHERE\s+|\s+AT\s+TIME\s+|\s+SIMILAR\s+TO\s+|\s+SET\s+|\s+DELETE\s+|\s+EMBED\s+|\s+RETURN\s+|$)`)
+	whereRegex := regexp.MustCompile(`(?i)WHERE\s+(.+?)(?:\s+AT\s+TIME\s+|\s+SIMILAR\s+TO\s+|\s+SET\s+|\s+DELETE\s+|\s+EMBED\s+|\s+RETURN\s+|$)`)
+	timeRegex := regexp.MustCompile(`(?i)AT\s+TIME\s+(EARLIEST|(\d+))(?:\s+SIMILAR\s+TO\s+|\s+SET\s+|\s+DELETE\s+|\s+EMBED\s+|\s+RETURN\s+|$)`)
+	similarToRegex := regexp.MustCompile(`(?i)SIMILAR\s+TO\s+(.+?)(?:\s+SET\s+|\s+DELETE\s+|\s+EMBED\s+|\s+RETURN\s+|$)`)
+	embedRegex := regexp.MustCompile(`(?i)EMBED\s+(.+?)(?:\s+RETURN\s+|$)`)
+	setRegex := regexp.MustCompile(`(?i)SET\s+(.+?)(?:\s+EMBED\s+|\s+RETURN\s+|$)`)
+	deleteRegex := regexp.MustCompile(`(?i)(DETACH\s+)?DELETE\s+(.+?)(?:\s+EMBED\s+|\s+RETURN\s+|$)`)
 	returnRegex := regexp.MustCompile(`(?i)RETURN\s+(.+)$`)
 
 	matchMatch := matchRegex.FindStringSubmatch(queryStr)
@@ -222,6 +242,26 @@ func parseMatchQuery(queryStr string) (*Query, error) {
 			return nil, fmt.Errorf("error parsing DELETE: %w", err)
 		}
 		query.DeleteClause = deleteClause
+	}
+
+	// Parse SIMILAR TO clause (optional)
+	similarToMatch := similarToRegex.FindStringSubmatch(queryStr)
+	if similarToMatch != nil {
+		similarToClause, err := parseSimilarToClause(similarToMatch[1])
+		if err != nil {
+			return nil, fmt.Errorf("error parsing SIMILAR TO: %w", err)
+		}
+		query.SimilarToClause = similarToClause
+	}
+
+	// Parse EMBED clause (optional)
+	embedMatch := embedRegex.FindStringSubmatch(queryStr)
+	if embedMatch != nil {
+		embedClause, err := parseEmbedClause(embedMatch[1])
+		if err != nil {
+			return nil, fmt.Errorf("error parsing EMBED: %w", err)
+		}
+		query.EmbedClause = embedClause
 	}
 
 	// Parse RETURN clause (optional for SET/DELETE)
@@ -692,4 +732,89 @@ func parseTimeClause(modeOrTimestamp string, timestamp string) (*TimeClause, err
 	}
 	tc.Timestamp = ts
 	return tc, nil
+}
+
+// parseEmbedClause parses an EMBED clause
+// Examples:
+//   EMBED p AUTO                    - generates text from labels + properties
+//   EMBED p "some literal text"     - embeds literal text
+//   EMBED p.description             - embeds value of the description property
+func parseEmbedClause(embedStr string) (*EmbedClause, error) {
+	embedStr = strings.TrimSpace(embedStr)
+	ec := &EmbedClause{}
+
+	// Check for AUTO mode: "p AUTO" or just "p" (AUTO is default)
+	autoRegex := regexp.MustCompile(`^([a-zA-Z_][a-zA-Z0-9_]*)\s+AUTO$`)
+	if match := autoRegex.FindStringSubmatch(embedStr); match != nil {
+		ec.Variable = match[1]
+		ec.Mode = "AUTO"
+		return ec, nil
+	}
+
+	// Check for literal text mode: "p \"some text\""
+	textRegex := regexp.MustCompile(`^([a-zA-Z_][a-zA-Z0-9_]*)\s+"([^"]*)"$`)
+	if match := textRegex.FindStringSubmatch(embedStr); match != nil {
+		ec.Variable = match[1]
+		ec.Mode = "TEXT"
+		ec.Text = match[2]
+		return ec, nil
+	}
+
+	// Check for property mode: "p.description"
+	propRegex := regexp.MustCompile(`^([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)$`)
+	if match := propRegex.FindStringSubmatch(embedStr); match != nil {
+		ec.Variable = match[1]
+		ec.Mode = "PROPERTY"
+		ec.Property = match[2]
+		return ec, nil
+	}
+
+	// Default: just variable name means AUTO
+	varRegex := regexp.MustCompile(`^([a-zA-Z_][a-zA-Z0-9_]*)$`)
+	if match := varRegex.FindStringSubmatch(embedStr); match != nil {
+		ec.Variable = match[1]
+		ec.Mode = "AUTO"
+		return ec, nil
+	}
+
+	return nil, fmt.Errorf("invalid EMBED syntax: %s", embedStr)
+}
+
+// parseSimilarToClause parses a SIMILAR TO clause
+// Examples:
+//   SIMILAR TO "backend engineers"
+//   SIMILAR TO "backend engineers" LIMIT 10
+//   SIMILAR TO "backend engineers" THRESHOLD 0.7
+//   SIMILAR TO "backend engineers" LIMIT 10 THRESHOLD 0.7
+func parseSimilarToClause(similarStr string) (*SimilarToClause, error) {
+	similarStr = strings.TrimSpace(similarStr)
+	stc := &SimilarToClause{}
+
+	// Extract the query text (in quotes)
+	textRegex := regexp.MustCompile(`^"([^"]*)"`)
+	textMatch := textRegex.FindStringSubmatch(similarStr)
+	if textMatch == nil {
+		return nil, fmt.Errorf("SIMILAR TO requires quoted query text")
+	}
+	stc.QueryText = textMatch[1]
+
+	// Extract optional LIMIT
+	limitRegex := regexp.MustCompile(`(?i)LIMIT\s+(\d+)`)
+	if limitMatch := limitRegex.FindStringSubmatch(similarStr); limitMatch != nil {
+		limit, err := strconv.Atoi(limitMatch[1])
+		if err == nil {
+			stc.Limit = limit
+		}
+	}
+
+	// Extract optional THRESHOLD
+	threshRegex := regexp.MustCompile(`(?i)THRESHOLD\s+([\d.]+)`)
+	if threshMatch := threshRegex.FindStringSubmatch(similarStr); threshMatch != nil {
+		thresh, err := strconv.ParseFloat(threshMatch[1], 32)
+		if err == nil {
+			stc.Threshold = float32(thresh)
+		}
+	}
+
+	return stc, nil
 }

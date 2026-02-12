@@ -1,9 +1,0 @@
-{"Type":"CREATE_NODE","Timestamp":"2026-02-12T16:50:17.110495-05:00","Data":{"id":"72d8eb06-509a-4aea-967c-c9ac788d8600","labels":["Person"]}}
-{"Type":"SET_NODE_PROPERTY","Timestamp":"2026-02-12T16:50:17.110496-05:00","Data":{"key":"name","node_id":"72d8eb06-509a-4aea-967c-c9ac788d8600","value":"Alice"}}
-{"Type":"SET_NODE_PROPERTY","Timestamp":"2026-02-12T16:50:17.110496-05:00","Data":{"key":"age","node_id":"72d8eb06-509a-4aea-967c-c9ac788d8600","value":30}}
-{"Type":"CREATE_NODE","Timestamp":"2026-02-12T16:50:17.110519-05:00","Data":{"id":"b0caf60f-91af-4e74-9a3a-899703777b2f","labels":["Person"]}}
-{"Type":"SET_NODE_PROPERTY","Timestamp":"2026-02-12T16:50:17.110519-05:00","Data":{"key":"name","node_id":"b0caf60f-91af-4e74-9a3a-899703777b2f","value":"Bob"}}
-{"Type":"SET_NODE_PROPERTY","Timestamp":"2026-02-12T16:50:17.11052-05:00","Data":{"key":"age","node_id":"b0caf60f-91af-4e74-9a3a-899703777b2f","value":25}}
-{"Type":"CREATE_NODE","Timestamp":"2026-02-12T16:50:17.110541-05:00","Data":{"id":"ff4ffec8-54f6-48e3-b8d5-7ec463ffc779","labels":["Person"]}}
-{"Type":"SET_NODE_PROPERTY","Timestamp":"2026-02-12T16:50:17.110541-05:00","Data":{"key":"name","node_id":"ff4ffec8-54f6-48e3-b8d5-7ec463ffc779","value":"Carol"}}
-{"Type":"SET_NODE_PROPERTY","Timestamp":"2026-02-12T16:50:17.110542-05:00","Data":{"key":"age","node_id":"ff4ffec8-54f6-48e3-b8d5-7ec463ffc779","value":35}}

@@ -1,24 +1,59 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 	"github.com/miron/go-graph-database/graph"
 )
 
 // Global graph instance
 var db *graph.Graph
+var serverConfig *graph.ServerConfig
+var embedder graph.Embedder
 
 func main() {
-	// Initialize the graph database with persistence
+	// Load .env file if present (silently ignore if not found)
+	_ = godotenv.Load()
+
+	// Parse config from DSN environment variable or use defaults
+	// Examples:
+	//   GRAPHDB_DSN=graphdb:///data                     (persist to ./data, no auth)
+	//   GRAPHDB_DSN=graphdb://admin:secret@:8080/data   (with auth)
+	//   GRAPHDB_DSN=graphdb://admin:secret@:8080/data?embedder=ollama://localhost:11434
+	dsn := os.Getenv("GRAPHDB_DSN")
+	if dsn == "" {
+		dsn = "graphdb:///data" // Default: persist to ./data, no auth
+	}
+
 	var err error
-	db, err = graph.NewGraphWithPersistence("data")
+	serverConfig, err = graph.ParseServerDSN(dsn)
+	if err != nil {
+		panic(fmt.Errorf("invalid GRAPHDB_DSN: %w", err))
+	}
+
+	// Initialize the graph database
+	db, err = serverConfig.Open()
 	if err != nil {
 		panic(err)
 	}
+
+	// Initialize embedder if configured
+	embedder, err = serverConfig.GetEmbedder()
+	if err != nil {
+		fmt.Printf("Warning: failed to initialize embedder: %v\n", err)
+	}
+
+	if serverConfig.RequiresAuth() {
+		fmt.Printf("Authentication enabled (user: %s)\n", serverConfig.Username)
+	}
+	fmt.Printf("Data directory: %s\n", serverConfig.DataDir)
+	fmt.Printf("Server address: %s\n", serverConfig.Address())
 
 	// Load some demo data (only if database is empty)
 	if len(db.GetNodesByLabel("Person")) == 0 {
@@ -29,12 +64,35 @@ func main() {
 	r := gin.Default()
 
 	// Enable CORS for frontend
+	allowOrigins := serverConfig.AllowOrigins
+	if len(allowOrigins) == 0 {
+		allowOrigins = []string{"http://localhost:5173", "http://localhost:8080"}
+	}
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:8080"},
+		AllowOrigins:     allowOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE"},
-		AllowHeaders:     []string{"Origin", "Content-Type"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
 		AllowCredentials: true,
 	}))
+
+	// Add auth middleware if configured
+	if serverConfig.RequiresAuth() {
+		auth := graph.NewAuthMiddlewareFromConfig(serverConfig.Config)
+		r.Use(func(c *gin.Context) {
+			// Skip auth for static files
+			if c.Request.URL.Path == "/" || len(c.Request.URL.Path) > 7 && c.Request.URL.Path[:7] == "/static" {
+				c.Next()
+				return
+			}
+			// Require auth for API routes
+			if !auth.Authenticate(c.Request) {
+				c.Header("WWW-Authenticate", `Basic realm="graphdb"`)
+				c.AbortWithStatus(http.StatusUnauthorized)
+				return
+			}
+			c.Next()
+		})
+	}
 
 	// Serve static files (frontend)
 	r.Static("/static", "./web/dist")
@@ -63,7 +121,14 @@ func main() {
 	}
 
 	// Start server
-	r.Run(":8080")
+	addr := serverConfig.Address()
+	if serverConfig.TLSCert != "" && serverConfig.TLSKey != "" {
+		fmt.Printf("Starting HTTPS server on %s\n", addr)
+		r.RunTLS(addr, serverConfig.TLSCert, serverConfig.TLSKey)
+	} else {
+		fmt.Printf("Starting HTTP server on %s\n", addr)
+		r.Run(addr)
+	}
 }
 
 // GraphResponse represents the graph data sent to the frontend
@@ -258,8 +323,8 @@ func executeQuery(c *gin.Context) {
 		return
 	}
 
-	// Execute the query
-	result, err := db.ExecuteQuery(query)
+	// Execute the query (with embedder if configured)
+	result, err := db.ExecuteQueryWithEmbedder(query, embedder)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "execution error: " + err.Error()})
 		return

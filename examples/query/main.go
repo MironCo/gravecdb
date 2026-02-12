@@ -82,6 +82,25 @@ func main() {
 
 		// Query nodes at earliest time
 		`MATCH (p:Person) AT TIME EARLIEST RETURN p.name, p.role`,
+
+		// === EMBEDDING queries ===
+		// Note: These require an embedder to be passed to ExecuteQueryWithEmbedder()
+		// Uncomment and use with OpenAI embedder for real semantic search
+
+		// Embed nodes using AUTO mode (combines labels + properties)
+		// `MATCH (p:Person) EMBED p AUTO RETURN p`,
+
+		// Embed nodes using a specific property
+		// `MATCH (p:Person) EMBED p.role RETURN p`,
+
+		// Embed nodes using literal text
+		// `MATCH (p:Person) EMBED p "software engineer with experience" RETURN p`,
+
+		// Semantic search - find similar nodes
+		// `MATCH (p:Person) SIMILAR TO "backend developers" RETURN p.name`,
+
+		// Semantic search with limit and threshold
+		// `MATCH (p:Person) SIMILAR TO "engineering managers" LIMIT 5 THRESHOLD 0.7 RETURN p.name, p.role`,
 	}
 
 	for i, queryStr := range queries {

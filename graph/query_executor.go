@@ -6,8 +6,18 @@ import (
 	"time"
 )
 
+// Embedder interface for generating embeddings
+type Embedder interface {
+	Embed(text string) ([]float32, error)
+}
+
 // ExecuteQuery executes a parsed query against the graph
 func (g *Graph) ExecuteQuery(query *Query) (*QueryResult, error) {
+	return g.ExecuteQueryWithEmbedder(query, nil)
+}
+
+// ExecuteQueryWithEmbedder executes a query with an optional embedder for EMBED/SIMILAR TO clauses
+func (g *Graph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*QueryResult, error) {
 	switch query.QueryType {
 	case "CREATE":
 		return g.executeCreateQuery(query)
@@ -18,6 +28,14 @@ func (g *Graph) ExecuteQuery(query *Query) (*QueryResult, error) {
 		}
 		if query.DeleteClause != nil {
 			return g.executeDeleteQuery(query)
+		}
+		// Handle SIMILAR TO semantic search
+		if query.SimilarToClause != nil {
+			return g.executeSimilarToQuery(query, embedder)
+		}
+		// Handle EMBED clause
+		if query.EmbedClause != nil {
+			return g.executeEmbedQuery(query, embedder)
 		}
 		// Regular MATCH query
 		return g.executeMatchQuery(query)
@@ -731,6 +749,217 @@ func (g *Graph) executeDeleteQuery(query *Query) (*QueryResult, error) {
 		Rows: []map[string]interface{}{
 			{"deleted": deletedCount},
 		},
+	}
+
+	return result, nil
+}
+
+// executeEmbedQuery executes a MATCH...EMBED query to generate embeddings for matched nodes
+func (g *Graph) executeEmbedQuery(query *Query, embedder Embedder) (*QueryResult, error) {
+	if embedder == nil {
+		return nil, fmt.Errorf("embedder required for EMBED clause")
+	}
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// Find matches
+	matches := g.findMatches(query.MatchPattern, query.TimeClause)
+
+	// Apply WHERE filters
+	if query.WhereClause != nil {
+		matches = g.filterMatches(matches, query.WhereClause)
+	}
+
+	embeddedCount := 0
+	ec := query.EmbedClause
+
+	for _, match := range matches {
+		entity, ok := match[ec.Variable]
+		if !ok {
+			continue
+		}
+
+		node, ok := entity.(*Node)
+		if !ok {
+			continue // Can only embed nodes
+		}
+
+		// Generate text based on mode
+		var text string
+		switch ec.Mode {
+		case "AUTO":
+			text = g.generateAutoEmbedText(node)
+		case "TEXT":
+			text = ec.Text
+		case "PROPERTY":
+			if propVal, exists := node.Properties[ec.Property]; exists {
+				text = fmt.Sprint(propVal)
+			} else {
+				continue // Skip nodes without the property
+			}
+		}
+
+		if text == "" {
+			continue
+		}
+
+		// Generate embedding
+		vector, err := embedder.Embed(text)
+		if err != nil {
+			return nil, fmt.Errorf("failed to embed node %s: %w", node.ID, err)
+		}
+
+		// Store embedding
+		g.embeddings.Add(node.ID, vector, "embedder")
+		embeddedCount++
+	}
+
+	// Build result
+	result := &QueryResult{
+		Columns: []string{"embedded"},
+		Rows: []map[string]interface{}{
+			{"embedded": embeddedCount},
+		},
+	}
+
+	return result, nil
+}
+
+// generateAutoEmbedText generates embedding text from node labels and properties
+func (g *Graph) generateAutoEmbedText(node *Node) string {
+	var parts []string
+
+	// Add labels
+	if len(node.Labels) > 0 {
+		parts = append(parts, strings.Join(node.Labels, " "))
+	}
+
+	// Add properties
+	for key, value := range node.Properties {
+		parts = append(parts, fmt.Sprintf("%s: %v", key, value))
+	}
+
+	return strings.Join(parts, ". ")
+}
+
+// executeSimilarToQuery executes a MATCH...SIMILAR TO semantic search query
+func (g *Graph) executeSimilarToQuery(query *Query, embedder Embedder) (*QueryResult, error) {
+	if embedder == nil {
+		return nil, fmt.Errorf("embedder required for SIMILAR TO clause")
+	}
+
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	stc := query.SimilarToClause
+
+	// Generate embedding for the query text
+	queryVector, err := embedder.Embed(stc.QueryText)
+	if err != nil {
+		return nil, fmt.Errorf("failed to embed query text: %w", err)
+	}
+
+	// Get query time
+	queryTime := g.getQueryTime(query.TimeClause)
+
+	// Find candidate nodes from MATCH pattern
+	candidateIDs := make(map[string]bool)
+	if len(query.MatchPattern.Nodes) > 0 {
+		candidates := g.getCandidateNodes(query.MatchPattern.Nodes[0])
+		for _, node := range candidates {
+			if queryTime != nil {
+				if node.IsValidAt(*queryTime) {
+					candidateIDs[node.ID] = true
+				}
+			} else {
+				if node.IsCurrentlyValid() {
+					candidateIDs[node.ID] = true
+				}
+			}
+		}
+
+		// Apply WHERE filters if present
+		if query.WhereClause != nil {
+			filteredIDs := make(map[string]bool)
+			for _, node := range candidates {
+				if !candidateIDs[node.ID] {
+					continue
+				}
+				match := Match{query.MatchPattern.Nodes[0].Variable: node}
+				if g.matchSatisfiesWhere(match, query.WhereClause) {
+					filteredIDs[node.ID] = true
+				}
+			}
+			candidateIDs = filteredIDs
+		}
+	}
+
+	// Search embeddings
+	var asOf time.Time
+	if queryTime != nil {
+		asOf = *queryTime
+	} else {
+		asOf = time.Now()
+	}
+
+	limit := stc.Limit
+	if limit == 0 {
+		limit = 100 // Default limit
+	}
+
+	searchResults := g.embeddings.Search(queryVector, limit, asOf, candidateIDs)
+
+	// Filter by threshold and build results
+	result := &QueryResult{
+		Columns: []string{},
+		Rows:    []map[string]interface{}{},
+	}
+
+	// Determine columns from RETURN clause
+	if query.ReturnClause != nil {
+		for _, item := range query.ReturnClause.Items {
+			if item.Property != "" {
+				result.Columns = append(result.Columns, item.Variable+"."+item.Property)
+			} else {
+				result.Columns = append(result.Columns, item.Variable)
+			}
+		}
+		// Add similarity score column
+		result.Columns = append(result.Columns, "similarity")
+	} else {
+		result.Columns = []string{"node", "similarity"}
+	}
+
+	for _, sr := range searchResults {
+		// Apply threshold filter
+		if stc.Threshold > 0 && sr.Similarity < stc.Threshold {
+			continue
+		}
+
+		node := g.getNodeByID(sr.NodeID)
+		if node == nil {
+			continue
+		}
+
+		row := map[string]interface{}{}
+
+		if query.ReturnClause != nil {
+			for _, item := range query.ReturnClause.Items {
+				columnName := item.Variable
+				if item.Property != "" {
+					columnName = item.Variable + "." + item.Property
+					row[columnName] = node.Properties[item.Property]
+				} else {
+					row[columnName] = node
+				}
+			}
+		} else {
+			row["node"] = node
+		}
+		row["similarity"] = sr.Similarity
+
+		result.Rows = append(result.Rows, row)
 	}
 
 	return result, nil

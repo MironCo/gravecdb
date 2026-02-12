@@ -480,3 +480,251 @@ func TestCreateRelationship(t *testing.T) {
 		t.Errorf("Expected 1 relationship, got %d", len(verifyResult.Rows))
 	}
 }
+
+// MockEmbedder is a test embedder that generates predictable embeddings
+type MockEmbedder struct {
+	embeddings map[string][]float32
+}
+
+func NewMockEmbedder() *MockEmbedder {
+	return &MockEmbedder{
+		embeddings: map[string][]float32{
+			"backend engineers":     {0.8, 0.2, 0.1},
+			"frontend developers":   {0.2, 0.8, 0.1},
+			"data scientists":       {0.1, 0.2, 0.8},
+			"Person. name: Alice. role: backend engineer":   {0.75, 0.25, 0.1},
+			"Person. name: Bob. role: frontend developer":   {0.25, 0.75, 0.1},
+			"Person. name: Carol. role: data scientist":     {0.1, 0.25, 0.75},
+			"backend engineer":      {0.75, 0.25, 0.1},
+			"frontend developer":    {0.25, 0.75, 0.1},
+			"data scientist":        {0.1, 0.25, 0.75},
+		},
+	}
+}
+
+func (m *MockEmbedder) Embed(text string) ([]float32, error) {
+	if vec, ok := m.embeddings[text]; ok {
+		return vec, nil
+	}
+	// Return a default embedding for unknown text
+	return []float32{0.33, 0.33, 0.33}, nil
+}
+
+func TestParseEmbedClauseAuto(t *testing.T) {
+	query := `MATCH (p:Person) EMBED p AUTO RETURN p`
+	parsed, err := ParseQuery(query)
+	if err != nil {
+		t.Fatalf("Failed to parse query: %v", err)
+	}
+
+	if parsed.EmbedClause == nil {
+		t.Fatal("EmbedClause is nil")
+	}
+
+	if parsed.EmbedClause.Variable != "p" {
+		t.Errorf("Expected variable 'p', got '%s'", parsed.EmbedClause.Variable)
+	}
+
+	if parsed.EmbedClause.Mode != "AUTO" {
+		t.Errorf("Expected mode 'AUTO', got '%s'", parsed.EmbedClause.Mode)
+	}
+}
+
+func TestParseEmbedClauseText(t *testing.T) {
+	query := `MATCH (p:Person) EMBED p "custom text for embedding" RETURN p`
+	parsed, err := ParseQuery(query)
+	if err != nil {
+		t.Fatalf("Failed to parse query: %v", err)
+	}
+
+	if parsed.EmbedClause == nil {
+		t.Fatal("EmbedClause is nil")
+	}
+
+	if parsed.EmbedClause.Mode != "TEXT" {
+		t.Errorf("Expected mode 'TEXT', got '%s'", parsed.EmbedClause.Mode)
+	}
+
+	if parsed.EmbedClause.Text != "custom text for embedding" {
+		t.Errorf("Expected text 'custom text for embedding', got '%s'", parsed.EmbedClause.Text)
+	}
+}
+
+func TestParseEmbedClauseProperty(t *testing.T) {
+	query := `MATCH (p:Person) EMBED p.description RETURN p`
+	parsed, err := ParseQuery(query)
+	if err != nil {
+		t.Fatalf("Failed to parse query: %v", err)
+	}
+
+	if parsed.EmbedClause == nil {
+		t.Fatal("EmbedClause is nil")
+	}
+
+	if parsed.EmbedClause.Mode != "PROPERTY" {
+		t.Errorf("Expected mode 'PROPERTY', got '%s'", parsed.EmbedClause.Mode)
+	}
+
+	if parsed.EmbedClause.Property != "description" {
+		t.Errorf("Expected property 'description', got '%s'", parsed.EmbedClause.Property)
+	}
+}
+
+func TestParseSimilarToClause(t *testing.T) {
+	query := `MATCH (p:Person) SIMILAR TO "backend engineers" LIMIT 10 THRESHOLD 0.7 RETURN p`
+	parsed, err := ParseQuery(query)
+	if err != nil {
+		t.Fatalf("Failed to parse query: %v", err)
+	}
+
+	if parsed.SimilarToClause == nil {
+		t.Fatal("SimilarToClause is nil")
+	}
+
+	if parsed.SimilarToClause.QueryText != "backend engineers" {
+		t.Errorf("Expected query text 'backend engineers', got '%s'", parsed.SimilarToClause.QueryText)
+	}
+
+	if parsed.SimilarToClause.Limit != 10 {
+		t.Errorf("Expected limit 10, got %d", parsed.SimilarToClause.Limit)
+	}
+
+	if parsed.SimilarToClause.Threshold != 0.7 {
+		t.Errorf("Expected threshold 0.7, got %f", parsed.SimilarToClause.Threshold)
+	}
+}
+
+func TestEmbedQueryExecution(t *testing.T) {
+	db := NewGraph()
+	embedder := NewMockEmbedder()
+
+	// Create test nodes
+	alice := db.CreateNode("Person")
+	db.SetNodeProperty(alice.ID, "name", "Alice")
+	db.SetNodeProperty(alice.ID, "role", "backend engineer")
+
+	bob := db.CreateNode("Person")
+	db.SetNodeProperty(bob.ID, "name", "Bob")
+	db.SetNodeProperty(bob.ID, "role", "frontend developer")
+
+	// Embed using PROPERTY mode
+	query := `MATCH (p:Person) EMBED p.role RETURN p`
+	parsed, err := ParseQuery(query)
+	if err != nil {
+		t.Fatalf("Failed to parse query: %v", err)
+	}
+
+	result, err := db.ExecuteQueryWithEmbedder(parsed, embedder)
+	if err != nil {
+		t.Fatalf("Failed to execute query: %v", err)
+	}
+
+	if result.Rows[0]["embedded"] != 2 {
+		t.Errorf("Expected 2 nodes embedded, got %v", result.Rows[0]["embedded"])
+	}
+
+	// Verify embeddings were stored
+	aliceEmb := db.GetNodeEmbedding(alice.ID)
+	if aliceEmb == nil {
+		t.Fatal("Alice's embedding is nil")
+	}
+
+	bobEmb := db.GetNodeEmbedding(bob.ID)
+	if bobEmb == nil {
+		t.Fatal("Bob's embedding is nil")
+	}
+}
+
+func TestSimilarToQueryExecution(t *testing.T) {
+	db := NewGraph()
+	embedder := NewMockEmbedder()
+
+	// Create test nodes with embeddings
+	alice := db.CreateNode("Person")
+	db.SetNodeProperty(alice.ID, "name", "Alice")
+	db.SetNodeProperty(alice.ID, "role", "backend engineer")
+
+	bob := db.CreateNode("Person")
+	db.SetNodeProperty(bob.ID, "name", "Bob")
+	db.SetNodeProperty(bob.ID, "role", "frontend developer")
+
+	carol := db.CreateNode("Person")
+	db.SetNodeProperty(carol.ID, "name", "Carol")
+	db.SetNodeProperty(carol.ID, "role", "data scientist")
+
+	// First embed all nodes
+	embedQuery := `MATCH (p:Person) EMBED p.role RETURN p`
+	parsed, err := ParseQuery(embedQuery)
+	if err != nil {
+		t.Fatalf("Failed to parse embed query: %v", err)
+	}
+
+	_, err = db.ExecuteQueryWithEmbedder(parsed, embedder)
+	if err != nil {
+		t.Fatalf("Failed to execute embed query: %v", err)
+	}
+
+	// Now search for similar nodes
+	searchQuery := `MATCH (p:Person) SIMILAR TO "backend engineers" RETURN p.name`
+	searchParsed, err := ParseQuery(searchQuery)
+	if err != nil {
+		t.Fatalf("Failed to parse search query: %v", err)
+	}
+
+	result, err := db.ExecuteQueryWithEmbedder(searchParsed, embedder)
+	if err != nil {
+		t.Fatalf("Failed to execute search query: %v", err)
+	}
+
+	// Should return all 3 nodes sorted by similarity
+	if len(result.Rows) != 3 {
+		t.Errorf("Expected 3 results, got %d", len(result.Rows))
+	}
+
+	// First result should be Alice (backend engineer - highest similarity)
+	if len(result.Rows) > 0 {
+		if result.Rows[0]["p.name"] != "Alice" {
+			t.Errorf("Expected first result to be Alice (most similar to backend engineers), got %v", result.Rows[0]["p.name"])
+		}
+	}
+}
+
+func TestSimilarToWithThreshold(t *testing.T) {
+	db := NewGraph()
+	embedder := NewMockEmbedder()
+
+	// Create test nodes
+	alice := db.CreateNode("Person")
+	db.SetNodeProperty(alice.ID, "name", "Alice")
+	db.SetNodeProperty(alice.ID, "role", "backend engineer")
+
+	bob := db.CreateNode("Person")
+	db.SetNodeProperty(bob.ID, "name", "Bob")
+	db.SetNodeProperty(bob.ID, "role", "frontend developer")
+
+	// Embed nodes
+	embedQuery := `MATCH (p:Person) EMBED p.role RETURN p`
+	parsed, _ := ParseQuery(embedQuery)
+	db.ExecuteQueryWithEmbedder(parsed, embedder)
+
+	// Search with high threshold - should only return high similarity matches
+	searchQuery := `MATCH (p:Person) SIMILAR TO "backend engineers" THRESHOLD 0.9 RETURN p.name`
+	searchParsed, err := ParseQuery(searchQuery)
+	if err != nil {
+		t.Fatalf("Failed to parse search query: %v", err)
+	}
+
+	result, err := db.ExecuteQueryWithEmbedder(searchParsed, embedder)
+	if err != nil {
+		t.Fatalf("Failed to execute search query: %v", err)
+	}
+
+	// With high threshold, might get fewer or no results depending on similarity
+	// This tests that threshold filtering works
+	for _, row := range result.Rows {
+		similarity, ok := row["similarity"].(float32)
+		if ok && similarity < 0.9 {
+			t.Errorf("Result with similarity %f should have been filtered by threshold 0.9", similarity)
+		}
+	}
+}

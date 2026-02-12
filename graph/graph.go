@@ -11,6 +11,7 @@ type Graph struct {
 	nodes         map[string]*Node
 	relationships map[string]*Relationship
 	nodesByLabel  map[string]map[string]*Node // label -> nodeID -> Node
+	embeddings    *EmbeddingStore             // Vector embeddings for semantic search
 	mu            sync.RWMutex
 	wal           *WAL // Write-Ahead Log for persistence (nil if persistence disabled)
 }
@@ -21,6 +22,7 @@ func NewGraph() *Graph {
 		nodes:         make(map[string]*Node),
 		relationships: make(map[string]*Relationship),
 		nodesByLabel:  make(map[string]map[string]*Node),
+		embeddings:    NewEmbeddingStore(),
 	}
 }
 
@@ -39,6 +41,7 @@ func NewGraphWithPersistence(dataDir string) (*Graph, error) {
 		nodes:         make(map[string]*Node),
 		relationships: make(map[string]*Relationship),
 		nodesByLabel:  make(map[string]map[string]*Node),
+		embeddings:    NewEmbeddingStore(),
 		wal:           wal,
 	}
 
@@ -65,6 +68,7 @@ func NewGraphWithMaxDurability(dataDir string) (*Graph, error) {
 		nodes:         make(map[string]*Node),
 		relationships: make(map[string]*Relationship),
 		nodesByLabel:  make(map[string]map[string]*Node),
+		embeddings:    NewEmbeddingStore(),
 		wal:           wal,
 	}
 
@@ -91,6 +95,7 @@ func NewGraphWithMaxPerformance(dataDir string) (*Graph, error) {
 		nodes:         make(map[string]*Node),
 		relationships: make(map[string]*Relationship),
 		nodesByLabel:  make(map[string]map[string]*Node),
+		embeddings:    NewEmbeddingStore(),
 		wal:           wal,
 	}
 
@@ -616,4 +621,66 @@ func (g *Graph) setRelationshipPropertyUnlocked(relID, key string, value interfa
 	// Apply the operation to the in-memory relationship
 	rel.Properties[key] = value
 	return nil
+}
+
+// SetNodeEmbedding stores a vector embedding for a node
+// Previous embeddings are automatically versioned (ValidTo is set)
+func (g *Graph) SetNodeEmbedding(nodeID string, vector []float32, model string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if _, exists := g.nodes[nodeID]; !exists {
+		return fmt.Errorf("node with ID %s not found", nodeID)
+	}
+
+	g.embeddings.Add(nodeID, vector, model)
+	return nil
+}
+
+// GetNodeEmbedding returns the current embedding for a node
+func (g *Graph) GetNodeEmbedding(nodeID string) *Embedding {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.embeddings.GetCurrent(nodeID)
+}
+
+// GetNodeEmbeddingAt returns the embedding that was valid at a specific time
+func (g *Graph) GetNodeEmbeddingAt(nodeID string, t time.Time) *Embedding {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.embeddings.GetAt(nodeID, t)
+}
+
+// SemanticSearch finds the k most similar nodes to a query vector
+// Only searches nodes that are valid at the current time
+func (g *Graph) SemanticSearch(query []float32, k int) []SearchResult {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	// Build set of currently valid node IDs
+	validNodeIDs := make(map[string]bool)
+	for id, node := range g.nodes {
+		if node.IsCurrentlyValid() {
+			validNodeIDs[id] = true
+		}
+	}
+
+	return g.embeddings.Search(query, k, time.Now(), validNodeIDs)
+}
+
+// SemanticSearchAt finds the k most similar nodes to a query vector at a specific time
+// Only searches nodes that were valid at the given time
+func (g *Graph) SemanticSearchAt(query []float32, k int, asOf time.Time) []SearchResult {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	// Build set of node IDs that were valid at the given time
+	validNodeIDs := make(map[string]bool)
+	for id, node := range g.nodes {
+		if node.IsValidAt(asOf) {
+			validNodeIDs[id] = true
+		}
+	}
+
+	return g.embeddings.Search(query, k, asOf, validNodeIDs)
 }
