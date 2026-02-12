@@ -1,0 +1,16 @@
+# Database files
+data/
+
+# Build artifacts
+graph-db
+
+# Frontend build
+web/dist/
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
