@@ -42,6 +42,9 @@ demo-pathfinding:
 demo-query:
 	@cd examples/query && go run main.go
 
+# Alias for demo-query
+run-query: demo-query
+
 # Run the temporal path-finding demo
 demo-temporal-paths:
 	@cd examples/temporal-paths && go run main.go

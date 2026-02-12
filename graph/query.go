@@ -16,7 +16,14 @@ type Query struct {
 	DeleteClause *DeleteClause
 	WhereClause  *WhereClause
 	ReturnClause *ReturnClause
-	IsPathQuery  bool // true if this is a shortestPath() query
+	TimeClause   *TimeClause   // Optional temporal constraint
+	IsPathQuery  bool          // true if this is a shortestPath() query
+}
+
+// TimeClause represents temporal query constraints
+type TimeClause struct {
+	Mode      string // "EARLIEST" or "TIMESTAMP"
+	Timestamp int64  // Unix timestamp (only used when Mode == "TIMESTAMP")
 }
 
 // CreateClause represents a CREATE operation
@@ -151,8 +158,9 @@ func parseMatchQuery(queryStr string) (*Query, error) {
 	query := &Query{QueryType: "MATCH"}
 
 	// Split into clauses
-	matchRegex := regexp.MustCompile(`(?i)MATCH\s+(.+?)(?:\s+WHERE\s+|\s+SET\s+|\s+DELETE\s+|\s+RETURN\s+|$)`)
-	whereRegex := regexp.MustCompile(`(?i)WHERE\s+(.+?)(?:\s+SET\s+|\s+DELETE\s+|\s+RETURN\s+|$)`)
+	matchRegex := regexp.MustCompile(`(?i)MATCH\s+(.+?)(?:\s+WHERE\s+|\s+AT\s+TIME\s+|\s+SET\s+|\s+DELETE\s+|\s+RETURN\s+|$)`)
+	whereRegex := regexp.MustCompile(`(?i)WHERE\s+(.+?)(?:\s+AT\s+TIME\s+|\s+SET\s+|\s+DELETE\s+|\s+RETURN\s+|$)`)
+	timeRegex := regexp.MustCompile(`(?i)AT\s+TIME\s+(EARLIEST|(\d+))(?:\s+SET\s+|\s+DELETE\s+|\s+RETURN\s+|$)`)
 	setRegex := regexp.MustCompile(`(?i)SET\s+(.+?)(?:\s+RETURN\s+|$)`)
 	deleteRegex := regexp.MustCompile(`(?i)(DETACH\s+)?DELETE\s+(.+?)(?:\s+RETURN\s+|$)`)
 	returnRegex := regexp.MustCompile(`(?i)RETURN\s+(.+)$`)
@@ -184,6 +192,16 @@ func parseMatchQuery(queryStr string) (*Query, error) {
 			return nil, fmt.Errorf("error parsing WHERE: %w", err)
 		}
 		query.WhereClause = whereClause
+	}
+
+	// Parse AT TIME clause (optional)
+	timeMatch := timeRegex.FindStringSubmatch(queryStr)
+	if timeMatch != nil {
+		timeClause, err := parseTimeClause(timeMatch[1], timeMatch[2])
+		if err != nil {
+			return nil, fmt.Errorf("error parsing AT TIME: %w", err)
+		}
+		query.TimeClause = timeClause
 	}
 
 	// Parse SET clause (optional)
@@ -652,4 +670,26 @@ func parseDeleteClause(detach bool, deleteStr string) (*DeleteClause, error) {
 	}
 
 	return dc, nil
+}
+
+// parseTimeClause parses an AT TIME clause
+// Example: AT TIME EARLIEST or AT TIME 1609459200
+func parseTimeClause(modeOrTimestamp string, timestamp string) (*TimeClause, error) {
+	tc := &TimeClause{}
+
+	// Check if mode is EARLIEST
+	if strings.ToUpper(modeOrTimestamp) == "EARLIEST" {
+		tc.Mode = "EARLIEST"
+		tc.Timestamp = 0
+		return tc, nil
+	}
+
+	// Otherwise, it's a timestamp (captured in first group when not EARLIEST)
+	tc.Mode = "TIMESTAMP"
+	ts, err := strconv.ParseInt(modeOrTimestamp, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid timestamp: %s", modeOrTimestamp)
+	}
+	tc.Timestamp = ts
+	return tc, nil
 }

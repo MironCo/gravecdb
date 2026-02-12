@@ -3,6 +3,7 @@ package graph
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ExecuteQuery executes a parsed query against the graph
@@ -36,7 +37,7 @@ func (g *Graph) executeMatchQuery(query *Query) (*QueryResult, error) {
 	}
 
 	// Find all matches for the pattern
-	matches := g.findMatches(query.MatchPattern)
+	matches := g.findMatches(query.MatchPattern, query.TimeClause)
 
 	// Apply WHERE filters
 	if query.WhereClause != nil {
@@ -53,12 +54,15 @@ func (g *Graph) executeMatchQuery(query *Query) (*QueryResult, error) {
 type Match map[string]interface{} // variable -> node or relationship
 
 // findMatches finds all matches of the pattern in the graph
-func (g *Graph) findMatches(pattern *MatchPattern) []Match {
+func (g *Graph) findMatches(pattern *MatchPattern, timeClause *TimeClause) []Match {
 	if len(pattern.Nodes) == 0 {
 		return nil
 	}
 
 	matches := []Match{}
+
+	// Determine the query time based on TimeClause
+	queryTime := g.getQueryTime(timeClause)
 
 	// Start with the first node pattern
 	firstNodePattern := pattern.Nodes[0]
@@ -66,8 +70,15 @@ func (g *Graph) findMatches(pattern *MatchPattern) []Match {
 
 	// For each candidate starting node, try to match the pattern
 	for _, startNode := range candidateNodes {
-		if !startNode.IsCurrentlyValid() {
-			continue
+		// Check validity based on temporal mode
+		if queryTime != nil {
+			if !startNode.IsValidAt(*queryTime) {
+				continue
+			}
+		} else {
+			if !startNode.IsCurrentlyValid() {
+				continue
+			}
 		}
 
 		// Initialize a new match
@@ -77,14 +88,48 @@ func (g *Graph) findMatches(pattern *MatchPattern) []Match {
 		}
 
 		// Try to extend this match through the pattern
-		g.extendMatch(match, pattern, 0, &matches)
+		g.extendMatch(match, pattern, 0, queryTime, &matches)
 	}
 
 	return matches
 }
 
+// getQueryTime converts a TimeClause to an actual time.Time for querying
+// Returns nil if no temporal filtering should be applied (current time query)
+func (g *Graph) getQueryTime(timeClause *TimeClause) *time.Time {
+	if timeClause == nil {
+		return nil // No temporal filtering
+	}
+
+	if timeClause.Mode == "EARLIEST" {
+		// For EARLIEST mode, we need to find the earliest ValidFrom timestamp
+		// across all nodes and relationships in the graph
+		var earliest *time.Time
+
+		for _, node := range g.nodes {
+			if earliest == nil || node.ValidFrom.Before(*earliest) {
+				t := node.ValidFrom
+				earliest = &t
+			}
+		}
+
+		for _, rel := range g.relationships {
+			if earliest == nil || rel.ValidFrom.Before(*earliest) {
+				t := rel.ValidFrom
+				earliest = &t
+			}
+		}
+
+		return earliest
+	}
+
+	// TIMESTAMP mode: convert Unix timestamp to time.Time
+	t := time.Unix(timeClause.Timestamp, 0)
+	return &t
+}
+
 // extendMatch recursively extends a partial match
-func (g *Graph) extendMatch(currentMatch Match, pattern *MatchPattern, relIndex int, allMatches *[]Match) {
+func (g *Graph) extendMatch(currentMatch Match, pattern *MatchPattern, relIndex int, queryTime *time.Time, allMatches *[]Match) {
 	// Base case: if we've matched all relationships, we have a complete match
 	if relIndex >= len(pattern.Relationships) {
 		// Create a copy of the match
@@ -108,11 +153,18 @@ func (g *Graph) extendMatch(currentMatch Match, pattern *MatchPattern, relIndex 
 	}
 
 	// Get all relationships from this node
-	rels := g.GetRelationshipsForNode(fromNode.ID)
+	rels := g.getRelationshipsForNodeUnlocked(fromNode.ID)
 
 	for _, rel := range rels {
-		if !rel.IsCurrentlyValid() {
-			continue
+		// Check validity based on temporal mode
+		if queryTime != nil {
+			if !rel.IsValidAt(*queryTime) {
+				continue
+			}
+		} else {
+			if !rel.IsCurrentlyValid() {
+				continue
+			}
 		}
 
 		// Check if relationship type matches
@@ -155,8 +207,19 @@ func (g *Graph) extendMatch(currentMatch Match, pattern *MatchPattern, relIndex 
 		}
 
 		toNode := g.getNodeByID(toNodeID)
-		if toNode == nil || !toNode.IsCurrentlyValid() {
+		if toNode == nil {
 			continue
+		}
+
+		// Check validity based on temporal mode
+		if queryTime != nil {
+			if !toNode.IsValidAt(*queryTime) {
+				continue
+			}
+		} else {
+			if !toNode.IsCurrentlyValid() {
+				continue
+			}
 		}
 
 		// Check if toNode matches the pattern
@@ -177,7 +240,7 @@ func (g *Graph) extendMatch(currentMatch Match, pattern *MatchPattern, relIndex 
 		}
 
 		// Recurse to match next relationship
-		g.extendMatch(extendedMatch, pattern, relIndex+1, allMatches)
+		g.extendMatch(extendedMatch, pattern, relIndex+1, queryTime, allMatches)
 	}
 }
 
@@ -434,7 +497,9 @@ func (g *Graph) executePathQuery(query *Query) (*QueryResult, error) {
 			}
 
 			if pf.Function == "shortestpath" {
-				path := g.ShortestPath(startNode.ID, endNode.ID)
+				// Use temporal path-finding if TimeClause is present
+				queryTime := g.getQueryTime(query.TimeClause)
+				path := g.ShortestPathAt(startNode.ID, endNode.ID, queryTime)
 				if path != nil {
 					allPaths = append(allPaths, path)
 				}
@@ -566,7 +631,7 @@ func (g *Graph) executeSetQuery(query *Query) (*QueryResult, error) {
 	defer g.mu.Unlock()
 
 	// Find matches
-	matches := g.findMatches(query.MatchPattern)
+	matches := g.findMatches(query.MatchPattern, query.TimeClause)
 
 	// Apply WHERE filters
 	if query.WhereClause != nil {
@@ -620,7 +685,7 @@ func (g *Graph) executeDeleteQuery(query *Query) (*QueryResult, error) {
 	defer g.mu.Unlock()
 
 	// Find matches
-	matches := g.findMatches(query.MatchPattern)
+	matches := g.findMatches(query.MatchPattern, query.TimeClause)
 
 	// Apply WHERE filters
 	if query.WhereClause != nil {
