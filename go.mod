@@ -1,4 +1,4 @@
-module github.com/miron/go-graph-database
+module github.com/MironCo/gravecdb
 
 go 1.25.5
 

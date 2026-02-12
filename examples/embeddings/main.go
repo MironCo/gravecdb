@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/miron/go-graph-database/graph"
+	"github.com/MironCo/gravecdb/graph"
 )
 
 // MockEmbedder is a simple embedder for demonstration

@@ -9,7 +9,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
-	"github.com/miron/go-graph-database/graph"
+	"github.com/MironCo/gravecdb/graph"
 )
 
 // Global graph instance

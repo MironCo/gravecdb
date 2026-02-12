@@ -113,7 +113,7 @@ historicalPeople := historicalView.GetNodesByLabel("Person")
 ### Client Library (Remote Connection)
 
 ```go
-import "github.com/miron/go-graph-database/client"
+import "github.com/MironCo/gravecdb/client"
 
 // Connect to a running server
 conn, _ := client.Connect("http://localhost:8080")

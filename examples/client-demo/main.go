@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/miron/go-graph-database/client"
-	"github.com/miron/go-graph-database/graph"
+	"github.com/MironCo/gravecdb/client"
+	"github.com/MironCo/gravecdb/graph"
 )
 
 func main() {

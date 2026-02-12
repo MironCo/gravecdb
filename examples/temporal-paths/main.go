@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/miron/go-graph-database/graph"
+	"github.com/MironCo/gravecdb/graph"
 )
 
 func main() {

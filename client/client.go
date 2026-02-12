@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/miron/go-graph-database/graph"
+	"github.com/MironCo/gravecdb/graph"
 )
 
 // Client represents a connection to a graph database server
