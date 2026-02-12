@@ -1,4 +1,4 @@
-.PHONY: build run server demo-basic demo-temporal demo-persistence demo-pathfinding demo-query demo-temporal-paths demo-client demo-performance web-dev web-build clean
+.PHONY: build run server demo-basic demo-temporal demo-persistence demo-pathfinding demo-query demo-temporal-paths demo-client demo-performance web-dev web-build docker docker-run clean
 
 # Build the server binary
 build:
@@ -56,6 +56,15 @@ demo-client:
 # Run the performance comparison demo
 demo-performance:
 	@cd examples/performance && go run main.go
+
+# Build Docker image
+docker:
+	@docker build -t gravecdb .
+	@echo "Built gravecdb Docker image"
+
+# Run Docker container
+docker-run:
+	@docker run -p 8080:8080 -v $(PWD)/data:/data gravecdb
 
 # Clean build artifacts
 clean:

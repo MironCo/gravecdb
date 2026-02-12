@@ -1,0 +1,10 @@
+data/
+.env
+gravecdb
+web/dist/
+node_modules/
+.git/
+.vscode/
+.idea/
+*.md
+examples/*/data*
