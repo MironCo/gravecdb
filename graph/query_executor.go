@@ -7,6 +7,26 @@ import (
 
 // ExecuteQuery executes a parsed query against the graph
 func (g *Graph) ExecuteQuery(query *Query) (*QueryResult, error) {
+	switch query.QueryType {
+	case "CREATE":
+		return g.executeCreateQuery(query)
+	case "MATCH":
+		// Handle MATCH with SET or DELETE
+		if query.SetClause != nil {
+			return g.executeSetQuery(query)
+		}
+		if query.DeleteClause != nil {
+			return g.executeDeleteQuery(query)
+		}
+		// Regular MATCH query
+		return g.executeMatchQuery(query)
+	default:
+		return nil, fmt.Errorf("unsupported query type: %s", query.QueryType)
+	}
+}
+
+// executeMatchQuery executes a regular MATCH query
+func (g *Graph) executeMatchQuery(query *Query) (*QueryResult, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -168,7 +188,7 @@ func (g *Graph) getCandidateNodes(pattern NodePattern) []*Node {
 	if len(pattern.Labels) > 0 {
 		// Get nodes by label
 		for _, label := range pattern.Labels {
-			nodes := g.GetNodesByLabel(label)
+			nodes := g.getNodesByLabelUnlocked(label)
 			candidates = append(candidates, nodes...)
 		}
 	} else {
@@ -440,6 +460,212 @@ func (g *Graph) executePathQuery(query *Query) (*QueryResult, error) {
 			pf.Variable: path,
 		}
 		result.Rows = append(result.Rows, row)
+	}
+
+	return result, nil
+}
+
+// executeCreateQuery executes a CREATE query
+func (g *Graph) executeCreateQuery(query *Query) (*QueryResult, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	cc := query.CreateClause
+	createdVars := make(map[string]interface{})
+	createdCount := 0
+
+	// Create nodes
+	for _, nodeSpec := range cc.Nodes {
+		node := g.createNodeUnlocked(nodeSpec.Labels...)
+
+		// Set properties
+		for key, value := range nodeSpec.Properties {
+			if err := g.setNodePropertyUnlocked(node.ID, key, value); err != nil {
+				return nil, err
+			}
+		}
+
+		if nodeSpec.Variable != "" {
+			createdVars[nodeSpec.Variable] = node
+		}
+		createdCount++
+	}
+
+	// Create relationships
+	for _, relSpec := range cc.Relationships {
+		// Get from and to nodes
+		fromNode, ok := createdVars[relSpec.FromVar].(*Node)
+		if !ok {
+			continue
+		}
+		toNode, ok := createdVars[relSpec.ToVar].(*Node)
+		if !ok {
+			continue
+		}
+
+		rel, err := g.createRelationshipUnlocked(relSpec.Type, fromNode.ID, toNode.ID)
+		if err != nil {
+			return nil, err
+		}
+
+		// Set properties
+		for key, value := range relSpec.Properties {
+			if err := g.setRelationshipPropertyUnlocked(rel.ID, key, value); err != nil {
+				return nil, err
+			}
+		}
+
+		if relSpec.Variable != "" {
+			createdVars[relSpec.Variable] = rel
+		}
+		createdCount++
+	}
+
+	// Build result
+	result := &QueryResult{
+		Columns: []string{},
+		Rows:    []map[string]interface{}{},
+	}
+
+	if query.ReturnClause != nil {
+		// Return specified variables
+		row := map[string]interface{}{}
+		for _, item := range query.ReturnClause.Items {
+			if val, ok := createdVars[item.Variable]; ok {
+				if item.Property != "" {
+					// Return property
+					if node, ok := val.(*Node); ok {
+						result.Columns = append(result.Columns, item.Variable+"."+item.Property)
+						row[item.Variable+"."+item.Property] = node.Properties[item.Property]
+					} else if rel, ok := val.(*Relationship); ok {
+						result.Columns = append(result.Columns, item.Variable+"."+item.Property)
+						row[item.Variable+"."+item.Property] = rel.Properties[item.Property]
+					}
+				} else {
+					// Return whole entity
+					result.Columns = append(result.Columns, item.Variable)
+					row[item.Variable] = val
+				}
+			}
+		}
+		result.Rows = append(result.Rows, row)
+	} else {
+		// Return count of created entities
+		result.Columns = []string{"created"}
+		result.Rows = append(result.Rows, map[string]interface{}{
+			"created": createdCount,
+		})
+	}
+
+	return result, nil
+}
+
+// executeSetQuery executes a MATCH...SET query
+func (g *Graph) executeSetQuery(query *Query) (*QueryResult, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// Find matches
+	matches := g.findMatches(query.MatchPattern)
+
+	// Apply WHERE filters
+	if query.WhereClause != nil {
+		matches = g.filterMatches(matches, query.WhereClause)
+	}
+
+	// Apply SET updates
+	updatedCount := 0
+	for _, match := range matches {
+		for _, update := range query.SetClause.Updates {
+			entity, ok := match[update.Variable]
+			if !ok {
+				continue
+			}
+
+			if node, ok := entity.(*Node); ok {
+				if err := g.setNodePropertyUnlocked(node.ID, update.Property, update.Value); err != nil {
+					return nil, err
+				}
+				updatedCount++
+			} else if rel, ok := entity.(*Relationship); ok {
+				if err := g.setRelationshipPropertyUnlocked(rel.ID, update.Property, update.Value); err != nil {
+					return nil, err
+				}
+				updatedCount++
+			}
+		}
+	}
+
+	// Build result
+	result := &QueryResult{
+		Columns: []string{},
+		Rows:    []map[string]interface{}{},
+	}
+
+	if query.ReturnClause != nil {
+		result = g.buildResult(matches, query.ReturnClause)
+	} else {
+		result.Columns = []string{"updated"}
+		result.Rows = append(result.Rows, map[string]interface{}{
+			"updated": updatedCount,
+		})
+	}
+
+	return result, nil
+}
+
+// executeDeleteQuery executes a MATCH...DELETE query
+func (g *Graph) executeDeleteQuery(query *Query) (*QueryResult, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// Find matches
+	matches := g.findMatches(query.MatchPattern)
+
+	// Apply WHERE filters
+	if query.WhereClause != nil {
+		matches = g.filterMatches(matches, query.WhereClause)
+	}
+
+	// Delete entities
+	deletedCount := 0
+	for _, match := range matches {
+		for _, varName := range query.DeleteClause.Variables {
+			entity, ok := match[varName]
+			if !ok {
+				continue
+			}
+
+			if node, ok := entity.(*Node); ok {
+				if query.DeleteClause.Detach {
+					// Delete all relationships first
+					rels := g.getRelationshipsForNodeUnlocked(node.ID)
+					for _, rel := range rels {
+						if err := g.deleteRelationshipUnlocked(rel.ID); err != nil {
+							// Already deleted, ignore error
+							continue
+						}
+					}
+				}
+				if err := g.deleteNodeUnlocked(node.ID); err != nil {
+					return nil, err
+				}
+				deletedCount++
+			} else if rel, ok := entity.(*Relationship); ok {
+				if err := g.deleteRelationshipUnlocked(rel.ID); err != nil {
+					return nil, err
+				}
+				deletedCount++
+			}
+		}
+	}
+
+	// Build result
+	result := &QueryResult{
+		Columns: []string{"deleted"},
+		Rows: []map[string]interface{}{
+			{"deleted": deletedCount},
+		},
 	}
 
 	return result, nil

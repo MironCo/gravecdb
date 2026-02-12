@@ -9,10 +9,54 @@ import (
 
 // Query represents a parsed Cypher-like query
 type Query struct {
+	QueryType    string        // "MATCH", "CREATE", "DELETE"
 	MatchPattern *MatchPattern
+	CreateClause *CreateClause
+	SetClause    *SetClause
+	DeleteClause *DeleteClause
 	WhereClause  *WhereClause
 	ReturnClause *ReturnClause
 	IsPathQuery  bool // true if this is a shortestPath() query
+}
+
+// CreateClause represents a CREATE operation
+type CreateClause struct {
+	Nodes         []CreateNode
+	Relationships []CreateRelationship
+}
+
+// CreateNode represents a node to create
+type CreateNode struct {
+	Variable   string
+	Labels     []string
+	Properties map[string]interface{}
+}
+
+// CreateRelationship represents a relationship to create
+type CreateRelationship struct {
+	Variable   string
+	Type       string
+	FromVar    string
+	ToVar      string
+	Properties map[string]interface{}
+}
+
+// SetClause represents property updates
+type SetClause struct {
+	Updates []PropertyUpdate
+}
+
+// PropertyUpdate represents a single property update
+type PropertyUpdate struct {
+	Variable string
+	Property string
+	Value    interface{}
+}
+
+// DeleteClause represents deletion operations
+type DeleteClause struct {
+	Variables []string // Variables to delete
+	Detach    bool     // DETACH DELETE (also delete relationships)
 }
 
 // MatchPattern represents a graph pattern to match
@@ -81,15 +125,36 @@ type QueryResult struct {
 // ParseQuery parses a Cypher-like query string
 // Supports queries like:
 //   MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE a.name = "Alice" RETURN a, b
-//   MATCH (p:Person) WHERE p.age > 25 RETURN p.name
-//   MATCH (a)-[:WORKS_AT]->(c:Company) RETURN a.name, c.name
-//   MATCH path = shortestPath((a:Person)-[*]-(b:Person)) WHERE a.name = "Alice" AND b.name = "David" RETURN path
+//   CREATE (p:Person {name: "Alice", age: 28})
+//   MATCH (p:Person) WHERE p.name = "Alice" SET p.age = 29
+//   MATCH (p:Person) WHERE p.name = "Alice" DELETE p
 func ParseQuery(queryStr string) (*Query, error) {
 	queryStr = strings.TrimSpace(queryStr)
+	queryLower := strings.ToLower(queryStr)
+
+	query := &Query{}
+
+	// Determine query type
+	if strings.HasPrefix(queryLower, "create") {
+		query.QueryType = "CREATE"
+		return parseCreateQuery(queryStr)
+	} else if strings.HasPrefix(queryLower, "match") {
+		query.QueryType = "MATCH"
+		return parseMatchQuery(queryStr)
+	} else {
+		return nil, fmt.Errorf("query must start with MATCH or CREATE")
+	}
+}
+
+// parseMatchQuery parses a MATCH query (with optional SET/DELETE)
+func parseMatchQuery(queryStr string) (*Query, error) {
+	query := &Query{QueryType: "MATCH"}
 
 	// Split into clauses
-	matchRegex := regexp.MustCompile(`(?i)MATCH\s+(.+?)(?:\s+WHERE\s+|\s+RETURN\s+|$)`)
-	whereRegex := regexp.MustCompile(`(?i)WHERE\s+(.+?)(?:\s+RETURN\s+|$)`)
+	matchRegex := regexp.MustCompile(`(?i)MATCH\s+(.+?)(?:\s+WHERE\s+|\s+SET\s+|\s+DELETE\s+|\s+RETURN\s+|$)`)
+	whereRegex := regexp.MustCompile(`(?i)WHERE\s+(.+?)(?:\s+SET\s+|\s+DELETE\s+|\s+RETURN\s+|$)`)
+	setRegex := regexp.MustCompile(`(?i)SET\s+(.+?)(?:\s+RETURN\s+|$)`)
+	deleteRegex := regexp.MustCompile(`(?i)(DETACH\s+)?DELETE\s+(.+?)(?:\s+RETURN\s+|$)`)
 	returnRegex := regexp.MustCompile(`(?i)RETURN\s+(.+)$`)
 
 	matchMatch := matchRegex.FindStringSubmatch(queryStr)
@@ -97,9 +162,7 @@ func ParseQuery(queryStr string) (*Query, error) {
 		return nil, fmt.Errorf("query must start with MATCH clause")
 	}
 
-	query := &Query{}
-
-	// Check if this is a path query (contains shortestPath or allShortestPaths)
+	// Check if this is a path query
 	matchStr := matchMatch[1]
 	if strings.Contains(strings.ToLower(matchStr), "shortestpath") ||
 	   strings.Contains(strings.ToLower(matchStr), "allshortestpaths") {
@@ -123,16 +186,67 @@ func ParseQuery(queryStr string) (*Query, error) {
 		query.WhereClause = whereClause
 	}
 
-	// Parse RETURN clause
+	// Parse SET clause (optional)
+	setMatch := setRegex.FindStringSubmatch(queryStr)
+	if setMatch != nil {
+		setClause, err := parseSetClause(setMatch[1])
+		if err != nil {
+			return nil, fmt.Errorf("error parsing SET: %w", err)
+		}
+		query.SetClause = setClause
+	}
+
+	// Parse DELETE clause (optional)
+	deleteMatch := deleteRegex.FindStringSubmatch(queryStr)
+	if deleteMatch != nil {
+		deleteClause, err := parseDeleteClause(deleteMatch[1] != "", deleteMatch[2])
+		if err != nil {
+			return nil, fmt.Errorf("error parsing DELETE: %w", err)
+		}
+		query.DeleteClause = deleteClause
+	}
+
+	// Parse RETURN clause (optional for SET/DELETE)
 	returnMatch := returnRegex.FindStringSubmatch(queryStr)
-	if returnMatch == nil {
-		return nil, fmt.Errorf("query must have RETURN clause")
+	if returnMatch != nil {
+		returnClause, err := parseReturnClause(returnMatch[1])
+		if err != nil {
+			return nil, fmt.Errorf("error parsing RETURN: %w", err)
+		}
+		query.ReturnClause = returnClause
 	}
-	returnClause, err := parseReturnClause(returnMatch[1])
+
+	return query, nil
+}
+
+// parseCreateQuery parses a CREATE query
+func parseCreateQuery(queryStr string) (*Query, error) {
+	query := &Query{QueryType: "CREATE"}
+
+	// Extract CREATE clause
+	createRegex := regexp.MustCompile(`(?i)CREATE\s+(.+?)(?:\s+RETURN\s+|$)`)
+	returnRegex := regexp.MustCompile(`(?i)RETURN\s+(.+)$`)
+
+	createMatch := createRegex.FindStringSubmatch(queryStr)
+	if createMatch == nil {
+		return nil, fmt.Errorf("invalid CREATE syntax")
+	}
+
+	createClause, err := parseCreateClause(createMatch[1])
 	if err != nil {
-		return nil, fmt.Errorf("error parsing RETURN: %w", err)
+		return nil, fmt.Errorf("error parsing CREATE: %w", err)
 	}
-	query.ReturnClause = returnClause
+	query.CreateClause = createClause
+
+	// Parse RETURN clause (optional)
+	returnMatch := returnRegex.FindStringSubmatch(queryStr)
+	if returnMatch != nil {
+		returnClause, err := parseReturnClause(returnMatch[1])
+		if err != nil {
+			return nil, fmt.Errorf("error parsing RETURN: %w", err)
+		}
+		query.ReturnClause = returnClause
+	}
 
 	return query, nil
 }
@@ -368,4 +482,174 @@ func parseReturnClause(returnStr string) (*ReturnClause, error) {
 	}
 
 	return rc, nil
+}
+
+// parseCreateClause parses a CREATE clause
+// Example: (p:Person {name: "Alice", age: 28})
+// Example: (a:Person)-[:KNOWS]->(b:Person)
+func parseCreateClause(createStr string) (*CreateClause, error) {
+	createStr = strings.TrimSpace(createStr)
+	cc := &CreateClause{
+		Nodes:         []CreateNode{},
+		Relationships: []CreateRelationship{},
+	}
+
+	// Parse nodes with properties: (var:Label {prop: value, ...})
+	nodeRegex := regexp.MustCompile(`\(([a-zA-Z_][a-zA-Z0-9_]*)?(?::([a-zA-Z_][a-zA-Z0-9_]*))?\s*(?:\{([^}]*)\})?\)`)
+	nodeMatches := nodeRegex.FindAllStringSubmatch(createStr, -1)
+
+	for _, match := range nodeMatches {
+		node := CreateNode{
+			Variable:   match[1],
+			Labels:     []string{},
+			Properties: make(map[string]interface{}),
+		}
+		if match[2] != "" {
+			node.Labels = append(node.Labels, match[2])
+		}
+		if match[3] != "" {
+			props, err := parseProperties(match[3])
+			if err != nil {
+				return nil, fmt.Errorf("error parsing properties: %w", err)
+			}
+			node.Properties = props
+		}
+		cc.Nodes = append(cc.Nodes, node)
+	}
+
+	// Parse relationships: -[:TYPE]->
+	relRegex := regexp.MustCompile(`-\[:([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:\{([^}]*)\})?\]->`)
+	relMatches := relRegex.FindAllStringSubmatch(createStr, -1)
+
+	for i, match := range relMatches {
+		rel := CreateRelationship{
+			Type:       match[1],
+			Properties: make(map[string]interface{}),
+		}
+		if i < len(cc.Nodes)-1 {
+			rel.FromVar = cc.Nodes[i].Variable
+			rel.ToVar = cc.Nodes[i+1].Variable
+		}
+		if match[2] != "" {
+			props, err := parseProperties(match[2])
+			if err != nil {
+				return nil, fmt.Errorf("error parsing relationship properties: %w", err)
+			}
+			rel.Properties = props
+		}
+		cc.Relationships = append(cc.Relationships, rel)
+	}
+
+	return cc, nil
+}
+
+// parseProperties parses property map from string
+// Example: name: "Alice", age: 28
+func parseProperties(propsStr string) (map[string]interface{}, error) {
+	props := make(map[string]interface{})
+	propsStr = strings.TrimSpace(propsStr)
+	if propsStr == "" {
+		return props, nil
+	}
+
+	// Split by comma (simple version, doesn't handle nested structures)
+	parts := strings.Split(propsStr, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		// Split by colon
+		kv := strings.SplitN(part, ":", 2)
+		if len(kv) != 2 {
+			continue
+		}
+
+		key := strings.TrimSpace(kv[0])
+		valueStr := strings.TrimSpace(kv[1])
+
+		// Parse value
+		var value interface{}
+		if strings.HasPrefix(valueStr, "\"") && strings.HasSuffix(valueStr, "\"") {
+			value = strings.Trim(valueStr, "\"")
+		} else if num, err := strconv.Atoi(valueStr); err == nil {
+			value = num
+		} else if num, err := strconv.ParseFloat(valueStr, 64); err == nil {
+			value = num
+		} else if valueStr == "true" || valueStr == "false" {
+			value = valueStr == "true"
+		} else {
+			value = valueStr
+		}
+
+		props[key] = value
+	}
+
+	return props, nil
+}
+
+// parseSetClause parses a SET clause
+// Example: p.age = 29, p.name = "Bob"
+func parseSetClause(setStr string) (*SetClause, error) {
+	setStr = strings.TrimSpace(setStr)
+	sc := &SetClause{
+		Updates: []PropertyUpdate{},
+	}
+
+	// Split by comma
+	parts := strings.Split(setStr, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+
+		// Parse: variable.property = value
+		updateRegex := regexp.MustCompile(`([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.+)`)
+		match := updateRegex.FindStringSubmatch(part)
+		if match == nil {
+			return nil, fmt.Errorf("invalid SET syntax: %s", part)
+		}
+
+		variable := match[1]
+		property := match[2]
+		valueStr := strings.TrimSpace(match[3])
+
+		// Parse value
+		var value interface{}
+		if strings.HasPrefix(valueStr, "\"") && strings.HasSuffix(valueStr, "\"") {
+			value = strings.Trim(valueStr, "\"")
+		} else if num, err := strconv.Atoi(valueStr); err == nil {
+			value = num
+		} else if num, err := strconv.ParseFloat(valueStr, 64); err == nil {
+			value = num
+		} else if valueStr == "true" || valueStr == "false" {
+			value = valueStr == "true"
+		} else {
+			value = valueStr
+		}
+
+		sc.Updates = append(sc.Updates, PropertyUpdate{
+			Variable: variable,
+			Property: property,
+			Value:    value,
+		})
+	}
+
+	return sc, nil
+}
+
+// parseDeleteClause parses a DELETE clause
+// Example: p, r
+func parseDeleteClause(detach bool, deleteStr string) (*DeleteClause, error) {
+	deleteStr = strings.TrimSpace(deleteStr)
+	dc := &DeleteClause{
+		Variables: []string{},
+		Detach:    detach,
+	}
+
+	// Split by comma
+	parts := strings.Split(deleteStr, ",")
+	for _, part := range parts {
+		variable := strings.TrimSpace(part)
+		if variable != "" {
+			dc.Variables = append(dc.Variables, variable)
+		}
+	}
+
+	return dc, nil
 }

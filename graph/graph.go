@@ -233,7 +233,12 @@ func (g *Graph) Close() error {
 func (g *Graph) CreateNode(labels ...string) *Node {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	return g.createNodeUnlocked(labels...)
+}
 
+// createNodeUnlocked creates a node without acquiring a lock (internal use)
+// Caller must already hold g.mu.Lock()
+func (g *Graph) createNodeUnlocked(labels ...string) *Node {
 	node := NewNode(labels...)
 
 	// Log the operation to the WAL before applying it
@@ -291,7 +296,12 @@ func (g *Graph) GetNode(id string) (*Node, error) {
 func (g *Graph) CreateRelationship(relType string, fromNodeID, toNodeID string) (*Relationship, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	return g.createRelationshipUnlocked(relType, fromNodeID, toNodeID)
+}
 
+// createRelationshipUnlocked creates a relationship without acquiring a lock (internal use)
+// Caller must already hold g.mu.Lock()
+func (g *Graph) createRelationshipUnlocked(relType string, fromNodeID, toNodeID string) (*Relationship, error) {
 	// Verify both nodes exist before creating the relationship
 	if _, exists := g.nodes[fromNodeID]; !exists {
 		return nil, fmt.Errorf("from node with ID %s not found", fromNodeID)
@@ -348,7 +358,12 @@ func (g *Graph) GetRelationship(id string) (*Relationship, error) {
 func (g *Graph) GetNodesByLabel(label string) []*Node {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
+	return g.getNodesByLabelUnlocked(label)
+}
 
+// getNodesByLabelUnlocked gets nodes by label without acquiring a lock (internal use)
+// Caller must already hold g.mu.RLock() or g.mu.Lock()
+func (g *Graph) getNodesByLabelUnlocked(label string) []*Node {
 	nodes := []*Node{}
 	if nodeMap, exists := g.nodesByLabel[label]; exists {
 		for _, node := range nodeMap {
@@ -366,7 +381,12 @@ func (g *Graph) GetNodesByLabel(label string) []*Node {
 func (g *Graph) GetRelationshipsForNode(nodeID string) []*Relationship {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
+	return g.getRelationshipsForNodeUnlocked(nodeID)
+}
 
+// getRelationshipsForNodeUnlocked gets relationships without acquiring a lock (internal use)
+// Caller must already hold g.mu.RLock() or g.mu.Lock()
+func (g *Graph) getRelationshipsForNodeUnlocked(nodeID string) []*Relationship {
 	rels := []*Relationship{}
 	for _, rel := range g.relationships {
 		// Only include relationships that are currently valid (not soft-deleted)
@@ -384,7 +404,12 @@ func (g *Graph) GetRelationshipsForNode(nodeID string) []*Relationship {
 func (g *Graph) DeleteNode(nodeID string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	return g.deleteNodeUnlocked(nodeID)
+}
 
+// deleteNodeUnlocked deletes a node without acquiring a lock (internal use)
+// Caller must already hold g.mu.Lock()
+func (g *Graph) deleteNodeUnlocked(nodeID string) error {
 	node, exists := g.nodes[nodeID]
 	if !exists {
 		return fmt.Errorf("node with ID %s not found", nodeID)
@@ -402,7 +427,7 @@ func (g *Graph) DeleteNode(nodeID string) error {
 		op := Operation{
 			Type: "DELETE_NODE",
 			Data: map[string]interface{}{
-				"node_id":   nodeID,
+				"node_id":    nodeID,
 				"deleted_at": now,
 			},
 		}
@@ -430,7 +455,12 @@ func (g *Graph) DeleteNode(nodeID string) error {
 func (g *Graph) DeleteRelationship(relID string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	return g.deleteRelationshipUnlocked(relID)
+}
 
+// deleteRelationshipUnlocked deletes a relationship without acquiring a lock (internal use)
+// Caller must already hold g.mu.Lock()
+func (g *Graph) deleteRelationshipUnlocked(relID string) error {
 	rel, exists := g.relationships[relID]
 	if !exists {
 		return fmt.Errorf("relationship with ID %s not found", relID)
@@ -468,7 +498,12 @@ func (g *Graph) DeleteRelationship(relID string) error {
 func (g *Graph) SetNodeProperty(nodeID, key string, value interface{}) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	return g.setNodePropertyUnlocked(nodeID, key, value)
+}
 
+// setNodePropertyUnlocked sets a property without acquiring a lock (internal use)
+// Caller must already hold g.mu.Lock()
+func (g *Graph) setNodePropertyUnlocked(nodeID, key string, value interface{}) error {
 	node, exists := g.nodes[nodeID]
 	if !exists {
 		return fmt.Errorf("node with ID %s not found", nodeID)
@@ -500,7 +535,12 @@ func (g *Graph) SetNodeProperty(nodeID, key string, value interface{}) error {
 func (g *Graph) SetRelationshipProperty(relID, key string, value interface{}) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	return g.setRelationshipPropertyUnlocked(relID, key, value)
+}
 
+// setRelationshipPropertyUnlocked sets a relationship property without acquiring a lock (internal use)
+// Caller must already hold g.mu.Lock()
+func (g *Graph) setRelationshipPropertyUnlocked(relID, key string, value interface{}) error {
 	rel, exists := g.relationships[relID]
 	if !exists {
 		return fmt.Errorf("relationship with ID %s not found", relID)

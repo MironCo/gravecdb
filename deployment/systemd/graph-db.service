@@ -1,0 +1,22 @@
+[Unit]
+Description=Graph Database Server
+After=network.target
+
+[Service]
+Type=simple
+User=graphdb
+WorkingDirectory=/opt/graph-db
+ExecStart=/opt/graph-db/graph-db
+Restart=always
+RestartSec=5
+
+# Environment variables
+Environment="PORT=8080"
+Environment="DATA_DIR=/var/lib/graph-db"
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

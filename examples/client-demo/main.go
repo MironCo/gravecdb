@@ -91,6 +91,64 @@ func main() {
 		printPathResult(result)
 	}
 
+	// Example 8: CREATE nodes and relationships via query
+	fmt.Println("\n=== CREATE: Adding new person and relationship ===")
+	result, err = conn.Query(`CREATE (h:Person {name: "Henry", role: "Designer", age: 27})`)
+	if err != nil {
+		log.Printf("CREATE error: %v\n", err)
+	} else {
+		fmt.Printf("  Created %v entities\n", result.Rows[0]["created"])
+	}
+
+	// Example 9: CREATE relationship between existing nodes
+	fmt.Println("\n=== CREATE: Connect Henry to Grace ===")
+	result, err = conn.Query(`CREATE (a:Person {name: "Henry"})-[:KNOWS]->(b:Person {name: "Grace"})`)
+	if err != nil {
+		log.Printf("CREATE error: %v\n", err)
+	} else {
+		fmt.Printf("  Created %v entities (reusing existing nodes pattern)\n", result.Rows[0]["created"])
+	}
+
+	// Example 10: UPDATE using SET
+	fmt.Println("\n=== UPDATE: Change Grace's age ===")
+	result, err = conn.Query(`MATCH (p:Person) WHERE p.name = "Grace" SET p.age = 30`)
+	if err != nil {
+		log.Printf("UPDATE error: %v\n", err)
+	} else {
+		fmt.Printf("  Updated %v properties\n", result.Rows[0]["updated"])
+	}
+
+	// Example 11: Verify the UPDATE
+	fmt.Println("\n=== Query 7: Verify Grace's new age ===")
+	result, err = conn.Query(`MATCH (p:Person) WHERE p.name = "Grace" RETURN p.name, p.age`)
+	if err != nil {
+		log.Printf("Query error: %v\n", err)
+	} else {
+		printResult(result)
+	}
+
+	// Example 12: DELETE a node
+	fmt.Println("\n=== DELETE: Remove Henry ===")
+	result, err = conn.Query(`MATCH (p:Person) WHERE p.name = "Henry" DELETE p`)
+	if err != nil {
+		log.Printf("DELETE error: %v\n", err)
+	} else {
+		fmt.Printf("  Deleted %v entities\n", result.Rows[0]["deleted"])
+	}
+
+	// Example 13: Verify the DELETE
+	fmt.Println("\n=== Query 8: Verify Henry is gone ===")
+	result, err = conn.Query(`MATCH (p:Person) WHERE p.name = "Henry" RETURN p.name`)
+	if err != nil {
+		log.Printf("Query error: %v\n", err)
+	} else {
+		if len(result.Rows) == 0 {
+			fmt.Println("  Henry has been deleted successfully!")
+		} else {
+			printResult(result)
+		}
+	}
+
 	fmt.Println("\n=== Demo Complete ===")
 }
 

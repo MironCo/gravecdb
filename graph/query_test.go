@@ -321,3 +321,162 @@ func TestMultipleRelationshipTypes(t *testing.T) {
 		t.Errorf("Expected 1 row, got %d", len(result.Rows))
 	}
 }
+
+func TestCreateNode(t *testing.T) {
+	db := NewGraph()
+
+	query := `CREATE (p:Person {name: "Alice", age: 28})`
+	parsed, err := ParseQuery(query)
+	if err != nil {
+		t.Fatalf("Failed to parse query: %v", err)
+	}
+
+	result, err := db.ExecuteQuery(parsed)
+	if err != nil {
+		t.Fatalf("Failed to execute query: %v", err)
+	}
+
+	if len(result.Rows) != 1 {
+		t.Errorf("Expected 1 row, got %d", len(result.Rows))
+	}
+
+	// Verify node was created
+	verifyQuery := `MATCH (p:Person) WHERE p.name = "Alice" RETURN p.name, p.age`
+	verifyParsed, err := ParseQuery(verifyQuery)
+	if err != nil {
+		t.Fatalf("Failed to parse verify query: %v", err)
+	}
+
+	verifyResult, err := db.ExecuteQuery(verifyParsed)
+	if err != nil {
+		t.Fatalf("Failed to execute verify query: %v", err)
+	}
+
+	if len(verifyResult.Rows) != 1 {
+		t.Errorf("Expected 1 person, got %d", len(verifyResult.Rows))
+	}
+
+	if verifyResult.Rows[0]["p.name"] != "Alice" {
+		t.Errorf("Expected Alice, got %v", verifyResult.Rows[0]["p.name"])
+	}
+
+	if verifyResult.Rows[0]["p.age"] != 28 {
+		t.Errorf("Expected age 28, got %v", verifyResult.Rows[0]["p.age"])
+	}
+}
+
+func TestSetProperty(t *testing.T) {
+	db := NewGraph()
+
+	// Create a node
+	alice := db.CreateNode("Person")
+	db.SetNodeProperty(alice.ID, "name", "Alice")
+	db.SetNodeProperty(alice.ID, "age", 28)
+
+	// Update property using SET
+	query := `MATCH (p:Person) WHERE p.name = "Alice" SET p.age = 29`
+	parsed, err := ParseQuery(query)
+	if err != nil {
+		t.Fatalf("Failed to parse query: %v", err)
+	}
+
+	result, err := db.ExecuteQuery(parsed)
+	if err != nil {
+		t.Fatalf("Failed to execute query: %v", err)
+	}
+
+	if result.Rows[0]["updated"] != 1 {
+		t.Errorf("Expected 1 update, got %v", result.Rows[0]["updated"])
+	}
+
+	// Verify update
+	verifyQuery := `MATCH (p:Person) WHERE p.name = "Alice" RETURN p.age`
+	verifyParsed, err := ParseQuery(verifyQuery)
+	if err != nil {
+		t.Fatalf("Failed to parse verify query: %v", err)
+	}
+
+	verifyResult, err := db.ExecuteQuery(verifyParsed)
+	if err != nil {
+		t.Fatalf("Failed to execute verify query: %v", err)
+	}
+
+	if verifyResult.Rows[0]["p.age"] != 29 {
+		t.Errorf("Expected age 29, got %v", verifyResult.Rows[0]["p.age"])
+	}
+}
+
+func TestDeleteNode(t *testing.T) {
+	db := NewGraph()
+
+	// Create a node
+	alice := db.CreateNode("Person")
+	db.SetNodeProperty(alice.ID, "name", "Alice")
+
+	// Delete using DELETE
+	query := `MATCH (p:Person) WHERE p.name = "Alice" DELETE p`
+	parsed, err := ParseQuery(query)
+	if err != nil {
+		t.Fatalf("Failed to parse query: %v", err)
+	}
+
+	result, err := db.ExecuteQuery(parsed)
+	if err != nil {
+		t.Fatalf("Failed to execute query: %v", err)
+	}
+
+	if result.Rows[0]["deleted"] != 1 {
+		t.Errorf("Expected 1 deletion, got %v", result.Rows[0]["deleted"])
+	}
+
+	// Verify deletion
+	verifyQuery := `MATCH (p:Person) WHERE p.name = "Alice" RETURN p`
+	verifyParsed, err := ParseQuery(verifyQuery)
+	if err != nil {
+		t.Fatalf("Failed to parse verify query: %v", err)
+	}
+
+	verifyResult, err := db.ExecuteQuery(verifyParsed)
+	if err != nil {
+		t.Fatalf("Failed to execute verify query: %v", err)
+	}
+
+	if len(verifyResult.Rows) != 0 {
+		t.Errorf("Expected 0 nodes after deletion, got %d", len(verifyResult.Rows))
+	}
+}
+
+func TestCreateRelationship(t *testing.T) {
+	db := NewGraph()
+
+	query := `CREATE (a:Person {name: "Alice"})-[:KNOWS]->(b:Person {name: "Bob"})`
+	parsed, err := ParseQuery(query)
+	if err != nil {
+		t.Fatalf("Failed to parse query: %v", err)
+	}
+
+	result, err := db.ExecuteQuery(parsed)
+	if err != nil {
+		t.Fatalf("Failed to execute query: %v", err)
+	}
+
+	if result.Rows[0]["created"] != 3 { // 2 nodes + 1 relationship
+		t.Errorf("Expected 3 created entities, got %v", result.Rows[0]["created"])
+	}
+
+	// Verify relationship was created
+	verifyQuery := `MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name`
+	verifyParsed, err := ParseQuery(verifyQuery)
+	if err != nil {
+		t.Fatalf("Failed to parse verify query: %v", err)
+	}
+
+	verifyResult, err := db.ExecuteQuery(verifyParsed)
+	if err != nil {
+		t.Fatalf("Failed to execute verify query: %v", err)
+	}
+
+	if len(verifyResult.Rows) != 1 {
+		t.Errorf("Expected 1 relationship, got %d", len(verifyResult.Rows))
+	}
+}
