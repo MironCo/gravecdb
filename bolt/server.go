@@ -94,6 +94,10 @@ type Connection struct {
 	decoder *packstream.Decoder
 	version []byte
 	failed  bool // Track if we're in a failed state
+
+	// Transaction state
+	inTransaction bool
+	tx            graph.GraphTransaction
 }
 
 func (s *Server) handleConnection(conn net.Conn) {
@@ -106,6 +110,19 @@ func (s *Server) handleConnection(conn net.Conn) {
 		decoder: packstream.NewDecoder(conn),
 		version: make([]byte, 4),
 	}
+
+	// Cleanup on disconnect
+	defer func() {
+		// Rollback any active transaction
+		if c.inTransaction && c.tx != nil {
+			c.tx.Rollback()
+			fmt.Printf("Transaction rolled back due to disconnect\n")
+		}
+		// Clean up pending results
+		pendingMu.Lock()
+		delete(pendingResults, c)
+		pendingMu.Unlock()
+	}()
 
 	// Perform handshake
 	if err := c.handshake(); err != nil {
@@ -251,7 +268,15 @@ func (c *Connection) handleRun(raw *packstream.RawStruct) error {
 		return c.sendFailure("Neo.ClientError.Statement.SyntaxError", err.Error())
 	}
 
-	result, err := c.db.ExecuteQueryWithEmbedder(query, nil)
+	var result *graph.QueryResult
+
+	// If we're in a transaction, execute within it
+	if c.inTransaction && c.tx != nil {
+		result, err = c.tx.ExecuteQuery(query, nil)
+	} else {
+		result, err = c.db.ExecuteQueryWithEmbedder(query, nil)
+	}
+
 	if err != nil {
 		c.failed = true
 		return c.sendFailure("Neo.ClientError.Statement.ExecutionFailed", err.Error())
@@ -333,6 +358,14 @@ func (c *Connection) handleReset() error {
 	delete(pendingResults, c)
 	pendingMu.Unlock()
 
+	// Rollback any active transaction
+	if c.inTransaction && c.tx != nil {
+		c.tx.Rollback()
+		c.tx = nil
+		c.inTransaction = false
+		fmt.Printf("Transaction rolled back due to RESET\n")
+	}
+
 	return c.sendSuccess(map[string]interface{}{})
 }
 
@@ -341,17 +374,65 @@ func (c *Connection) handleAckFailure() error {
 	return c.sendSuccess(map[string]interface{}{})
 }
 
-// Transaction stubs - we don't support real transactions yet, but accept the messages
+// Transaction handling - real ACID transactions if the database supports it
 func (c *Connection) handleBegin() error {
-	// Auto-commit mode - just acknowledge
+	if c.inTransaction {
+		return c.sendFailure("Neo.ClientError.Transaction.TransactionStartFailed", "Already in a transaction")
+	}
+
+	// Check if the database supports transactions
+	if txDB, ok := c.db.(graph.TransactionalGraphDB); ok {
+		tx, err := txDB.BeginTransaction()
+		if err != nil {
+			return c.sendFailure("Neo.ClientError.Transaction.TransactionStartFailed", err.Error())
+		}
+		c.tx = tx
+		c.inTransaction = true
+		fmt.Printf("Transaction started\n")
+	} else {
+		// Database doesn't support transactions - use auto-commit mode
+		c.inTransaction = true
+		fmt.Printf("Transaction started (auto-commit mode - no real transaction support)\n")
+	}
+
 	return c.sendSuccess(map[string]interface{}{})
 }
 
 func (c *Connection) handleCommit() error {
+	if !c.inTransaction {
+		return c.sendFailure("Neo.ClientError.Transaction.TransactionNotFound", "No transaction to commit")
+	}
+
+	if c.tx != nil {
+		if err := c.tx.Commit(); err != nil {
+			c.inTransaction = false
+			c.tx = nil
+			return c.sendFailure("Neo.ClientError.Transaction.TransactionCommitFailed", err.Error())
+		}
+		fmt.Printf("Transaction committed\n")
+	}
+
+	c.inTransaction = false
+	c.tx = nil
 	return c.sendSuccess(map[string]interface{}{})
 }
 
 func (c *Connection) handleRollback() error {
+	if !c.inTransaction {
+		return c.sendFailure("Neo.ClientError.Transaction.TransactionNotFound", "No transaction to rollback")
+	}
+
+	if c.tx != nil {
+		if err := c.tx.Rollback(); err != nil {
+			c.inTransaction = false
+			c.tx = nil
+			return c.sendFailure("Neo.ClientError.Transaction.TransactionRollbackFailed", err.Error())
+		}
+		fmt.Printf("Transaction rolled back\n")
+	}
+
+	c.inTransaction = false
+	c.tx = nil
 	return c.sendSuccess(map[string]interface{}{})
 }
 

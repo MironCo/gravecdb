@@ -353,3 +353,256 @@ func (s *BoltStore) Stats() (*bolt.Stats, error) {
 	stats := s.db.Stats()
 	return &stats, nil
 }
+
+// ========== Transaction Support ==========
+
+// Tx wraps a bbolt transaction with graph-aware operations
+type Tx struct {
+	btx       *bolt.Tx
+	writable  bool
+	committed bool
+}
+
+// BeginTx starts a new transaction
+// writable=true for read-write, false for read-only
+func (s *BoltStore) BeginTx(writable bool) (*Tx, error) {
+	btx, err := s.db.Begin(writable)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	return &Tx{btx: btx, writable: writable}, nil
+}
+
+// Commit commits the transaction
+func (tx *Tx) Commit() error {
+	if tx.committed {
+		return fmt.Errorf("transaction already committed or rolled back")
+	}
+	tx.committed = true
+	return tx.btx.Commit()
+}
+
+// Rollback aborts the transaction
+func (tx *Tx) Rollback() error {
+	if tx.committed {
+		return nil // Already committed, nothing to rollback
+	}
+	tx.committed = true
+	return tx.btx.Rollback()
+}
+
+// SaveNode persists a node within a transaction
+func (tx *Tx) SaveNode(node *Node) error {
+	if !tx.writable {
+		return fmt.Errorf("cannot write in read-only transaction")
+	}
+
+	b := tx.btx.Bucket(nodesBucket)
+	if b == nil {
+		return fmt.Errorf("nodes bucket not found")
+	}
+
+	data, err := json.Marshal(node)
+	if err != nil {
+		return fmt.Errorf("failed to marshal node: %w", err)
+	}
+
+	if err := b.Put([]byte(node.ID), data); err != nil {
+		return fmt.Errorf("failed to save node: %w", err)
+	}
+
+	// Update label index
+	lb := tx.btx.Bucket(labelIndexBucket)
+	if lb != nil {
+		for _, label := range node.Labels {
+			indexKey := []byte(label + ":" + node.ID)
+			if err := lb.Put(indexKey, []byte(node.ID)); err != nil {
+				return fmt.Errorf("failed to update label index: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// GetNode retrieves a node within a transaction
+func (tx *Tx) GetNode(id string) (*Node, error) {
+	b := tx.btx.Bucket(nodesBucket)
+	if b == nil {
+		return nil, fmt.Errorf("nodes bucket not found")
+	}
+
+	data := b.Get([]byte(id))
+	if data == nil {
+		return nil, nil
+	}
+
+	node := &Node{}
+	if err := json.Unmarshal(data, node); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal node: %w", err)
+	}
+
+	return node, nil
+}
+
+// DeleteNode marks a node as deleted within a transaction
+func (tx *Tx) DeleteNode(id string, deletedAt time.Time) error {
+	if !tx.writable {
+		return fmt.Errorf("cannot write in read-only transaction")
+	}
+
+	b := tx.btx.Bucket(nodesBucket)
+	if b == nil {
+		return fmt.Errorf("nodes bucket not found")
+	}
+
+	data := b.Get([]byte(id))
+	if data == nil {
+		return fmt.Errorf("node not found: %s", id)
+	}
+
+	var node Node
+	if err := json.Unmarshal(data, &node); err != nil {
+		return fmt.Errorf("failed to unmarshal node: %w", err)
+	}
+
+	node.ValidTo = &deletedAt
+
+	updatedData, err := json.Marshal(node)
+	if err != nil {
+		return fmt.Errorf("failed to marshal node: %w", err)
+	}
+
+	return b.Put([]byte(id), updatedData)
+}
+
+// SaveRelationship persists a relationship within a transaction
+func (tx *Tx) SaveRelationship(rel *Relationship) error {
+	if !tx.writable {
+		return fmt.Errorf("cannot write in read-only transaction")
+	}
+
+	b := tx.btx.Bucket(relationshipsBucket)
+	if b == nil {
+		return fmt.Errorf("relationships bucket not found")
+	}
+
+	data, err := json.Marshal(rel)
+	if err != nil {
+		return fmt.Errorf("failed to marshal relationship: %w", err)
+	}
+
+	return b.Put([]byte(rel.ID), data)
+}
+
+// GetRelationship retrieves a relationship within a transaction
+func (tx *Tx) GetRelationship(id string) (*Relationship, error) {
+	b := tx.btx.Bucket(relationshipsBucket)
+	if b == nil {
+		return nil, fmt.Errorf("relationships bucket not found")
+	}
+
+	data := b.Get([]byte(id))
+	if data == nil {
+		return nil, nil
+	}
+
+	rel := &Relationship{}
+	if err := json.Unmarshal(data, rel); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal relationship: %w", err)
+	}
+
+	return rel, nil
+}
+
+// DeleteRelationship marks a relationship as deleted within a transaction
+func (tx *Tx) DeleteRelationship(id string, deletedAt time.Time) error {
+	if !tx.writable {
+		return fmt.Errorf("cannot write in read-only transaction")
+	}
+
+	b := tx.btx.Bucket(relationshipsBucket)
+	if b == nil {
+		return fmt.Errorf("relationships bucket not found")
+	}
+
+	data := b.Get([]byte(id))
+	if data == nil {
+		return fmt.Errorf("relationship not found: %s", id)
+	}
+
+	var rel Relationship
+	if err := json.Unmarshal(data, &rel); err != nil {
+		return fmt.Errorf("failed to unmarshal relationship: %w", err)
+	}
+
+	rel.ValidTo = &deletedAt
+
+	updatedData, err := json.Marshal(rel)
+	if err != nil {
+		return fmt.Errorf("failed to marshal relationship: %w", err)
+	}
+
+	return b.Put([]byte(id), updatedData)
+}
+
+// GetAllNodes retrieves all nodes within a transaction
+func (tx *Tx) GetAllNodes() ([]*Node, error) {
+	b := tx.btx.Bucket(nodesBucket)
+	if b == nil {
+		return nil, fmt.Errorf("nodes bucket not found")
+	}
+
+	var nodes []*Node
+	c := b.Cursor()
+
+	for k, v := c.First(); k != nil; k, v = c.Next() {
+		var node Node
+		if err := json.Unmarshal(v, &node); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal node: %w", err)
+		}
+		nodes = append(nodes, &node)
+	}
+
+	return nodes, nil
+}
+
+// GetAllRelationships retrieves all relationships within a transaction
+func (tx *Tx) GetAllRelationships() ([]*Relationship, error) {
+	b := tx.btx.Bucket(relationshipsBucket)
+	if b == nil {
+		return nil, fmt.Errorf("relationships bucket not found")
+	}
+
+	var rels []*Relationship
+	c := b.Cursor()
+
+	for k, v := c.First(); k != nil; k, v = c.Next() {
+		var rel Relationship
+		if err := json.Unmarshal(v, &rel); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal relationship: %w", err)
+		}
+		rels = append(rels, &rel)
+	}
+
+	return rels, nil
+}
+
+// SaveEmbedding persists embeddings within a transaction
+func (tx *Tx) SaveEmbedding(nodeID string, embeddings []*Embedding) error {
+	if !tx.writable {
+		return fmt.Errorf("cannot write in read-only transaction")
+	}
+
+	b := tx.btx.Bucket(embeddingsBucket)
+	if b == nil {
+		return fmt.Errorf("embeddings bucket not found")
+	}
+
+	data, err := json.Marshal(embeddings)
+	if err != nil {
+		return fmt.Errorf("failed to marshal embeddings: %w", err)
+	}
+
+	return b.Put([]byte(nodeID), data)
+}
