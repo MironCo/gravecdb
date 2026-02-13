@@ -21,6 +21,11 @@ type Config struct {
 
 	// Storage backend ("bolt" or "wal", defaults to "bolt")
 	StorageBackend string
+
+	// Storage mode ("memory" or "disk", defaults to "memory")
+	// - memory: Load all data into RAM (fast queries, RAM-limited)
+	// - disk: Query disk directly with LRU cache (slower, unlimited size)
+	StorageMode string
 }
 
 // ParseDSN parses a connection string into a Config
@@ -90,6 +95,8 @@ func ParseDSN(dsn string) (*Config, error) {
 					cfg.EmbedderURL = kv[1]
 				case "backend", "storage":
 					cfg.StorageBackend = kv[1]
+				case "mode":
+					cfg.StorageMode = kv[1]
 				}
 			}
 		}
@@ -118,22 +125,15 @@ func ParseDSN(dsn string) (*Config, error) {
 }
 
 // Open creates a new graph database from the config
-func (cfg *Config) Open() (*Graph, error) {
+// Returns GraphDB interface - defaults to disk-first mode (low RAM, unlimited size)
+func (cfg *Config) Open() (GraphDB, error) {
 	if cfg.DataDir == "" {
+		// In-memory only (no persistence)
 		return NewGraph(), nil
 	}
 
-	// Default to bbolt if not specified
-	if cfg.StorageBackend == "" || cfg.StorageBackend == "bolt" {
-		return NewGraphWithBolt(cfg.DataDir)
-	}
-
-	// Fall back to WAL for backwards compatibility
-	if cfg.StorageBackend == "wal" {
-		return NewGraphWithPersistence(cfg.DataDir)
-	}
-
-	return nil, fmt.Errorf("unknown storage backend: %s (use 'bolt' or 'wal')", cfg.StorageBackend)
+	// Default: disk-first mode with bbolt (low RAM, unlimited size)
+	return NewDiskGraph(cfg.DataDir, 10000) // 10k node cache by default
 }
 
 // RequiresAuth returns true if authentication is configured

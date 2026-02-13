@@ -13,7 +13,7 @@ import (
 )
 
 // Global graph instance
-var db *graph.Graph
+var db graph.GraphDB
 var serverConfig *graph.ServerConfig
 var embedder graph.Embedder
 
