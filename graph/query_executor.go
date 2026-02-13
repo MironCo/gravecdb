@@ -22,6 +22,10 @@ func (g *Graph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*Quer
 	case "CREATE":
 		return g.executeCreateQuery(query)
 	case "MATCH":
+		// Handle MATCH with CREATE (e.g., MATCH...CREATE pattern)
+		if query.CreateClause != nil {
+			return g.executeMatchCreateQuery(query)
+		}
 		// Handle MATCH with SET or DELETE
 		if query.SetClause != nil {
 			return g.executeSetQuery(query)
@@ -284,20 +288,30 @@ func (g *Graph) getCandidateNodes(pattern NodePattern) []*Node {
 
 // nodeMatchesPattern checks if a node matches a pattern
 func (g *Graph) nodeMatchesPattern(node *Node, pattern NodePattern) bool {
-	if len(pattern.Labels) == 0 {
-		return true
-	}
-
 	// Check if node has all required labels
-	for _, requiredLabel := range pattern.Labels {
-		hasLabel := false
-		for _, nodeLabel := range node.Labels {
-			if nodeLabel == requiredLabel {
-				hasLabel = true
-				break
+	if len(pattern.Labels) > 0 {
+		for _, requiredLabel := range pattern.Labels {
+			hasLabel := false
+			for _, nodeLabel := range node.Labels {
+				if nodeLabel == requiredLabel {
+					hasLabel = true
+					break
+				}
+			}
+			if !hasLabel {
+				return false
 			}
 		}
-		if !hasLabel {
+	}
+
+	// Check inline property constraints
+	for key, expectedValue := range pattern.Properties {
+		actualValue, exists := node.Properties[key]
+		if !exists {
+			return false
+		}
+		// Simple equality check
+		if actualValue != expectedValue {
 			return false
 		}
 	}
@@ -411,6 +425,11 @@ func (g *Graph) buildResult(matches []Match, returnClause *ReturnClause) *QueryR
 	result := &QueryResult{
 		Columns: []string{},
 		Rows:    []map[string]interface{}{},
+	}
+
+	// If no return clause, return empty result
+	if returnClause == nil {
+		return result
 	}
 
 	// Build column names
@@ -632,6 +651,134 @@ func (g *Graph) executeCreateQuery(query *Query) (*QueryResult, error) {
 			}
 		}
 		result.Rows = append(result.Rows, row)
+	} else {
+		// Return count of created entities
+		result.Columns = []string{"created"}
+		result.Rows = append(result.Rows, map[string]interface{}{
+			"created": createdCount,
+		})
+	}
+
+	return result, nil
+}
+
+// executeMatchCreateQuery executes a MATCH...CREATE query
+func (g *Graph) executeMatchCreateQuery(query *Query) (*QueryResult, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// Find matches for the MATCH pattern
+	matches := g.findMatches(query.MatchPattern, query.TimeClause)
+
+	// Apply WHERE filters
+	if query.WhereClause != nil {
+		matches = g.filterMatches(matches, query.WhereClause)
+	}
+
+	// For each match, create the entities specified in CREATE clause
+	cc := query.CreateClause
+	createdCount := 0
+	allCreatedVars := []map[string]interface{}{}
+
+	for _, match := range matches {
+		createdVars := make(map[string]interface{})
+
+		// Copy matched variables into createdVars so they can be referenced
+		for varName, entity := range match {
+			createdVars[varName] = entity
+		}
+
+		// Create nodes
+		for _, nodeSpec := range cc.Nodes {
+			node := g.createNodeUnlocked(nodeSpec.Labels...)
+
+			// Set properties
+			for key, value := range nodeSpec.Properties {
+				if err := g.setNodePropertyUnlocked(node.ID, key, value); err != nil {
+					return nil, err
+				}
+			}
+
+			if nodeSpec.Variable != "" {
+				createdVars[nodeSpec.Variable] = node
+			}
+			createdCount++
+		}
+
+		// Create relationships
+		for _, relSpec := range cc.Relationships {
+			// Get from and to nodes (could be matched or newly created)
+			var fromNode, toNode *Node
+
+			if fromEntity, ok := createdVars[relSpec.FromVar]; ok {
+				fromNode, _ = fromEntity.(*Node)
+			}
+			if toEntity, ok := createdVars[relSpec.ToVar]; ok {
+				toNode, _ = toEntity.(*Node)
+			}
+
+			if fromNode == nil || toNode == nil {
+				continue
+			}
+
+			rel, err := g.createRelationshipUnlocked(relSpec.Type, fromNode.ID, toNode.ID)
+			if err != nil {
+				return nil, err
+			}
+
+			// Set properties
+			for key, value := range relSpec.Properties {
+				if err := g.setRelationshipPropertyUnlocked(rel.ID, key, value); err != nil {
+					return nil, err
+				}
+			}
+
+			if relSpec.Variable != "" {
+				createdVars[relSpec.Variable] = rel
+			}
+			createdCount++
+		}
+
+		allCreatedVars = append(allCreatedVars, createdVars)
+	}
+
+	// Build result
+	result := &QueryResult{
+		Columns: []string{},
+		Rows:    []map[string]interface{}{},
+	}
+
+	if query.ReturnClause != nil {
+		// Return specified variables from all created entities
+		for _, createdVars := range allCreatedVars {
+			row := map[string]interface{}{}
+			for _, item := range query.ReturnClause.Items {
+				if len(result.Columns) < len(query.ReturnClause.Items) {
+					if item.Property != "" {
+						result.Columns = append(result.Columns, item.Variable+"."+item.Property)
+					} else {
+						result.Columns = append(result.Columns, item.Variable)
+					}
+				}
+
+				if val, ok := createdVars[item.Variable]; ok {
+					if item.Property != "" {
+						// Return property
+						if node, ok := val.(*Node); ok {
+							row[item.Variable+"."+item.Property] = node.Properties[item.Property]
+						} else if rel, ok := val.(*Relationship); ok {
+							row[item.Variable+"."+item.Property] = rel.Properties[item.Property]
+						}
+					} else {
+						// Return whole entity
+						row[item.Variable] = val
+					}
+				}
+			}
+			if len(row) > 0 {
+				result.Rows = append(result.Rows, row)
+			}
+		}
 	} else {
 		// Return count of created entities
 		result.Columns = []string{"created"}

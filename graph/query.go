@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/MironCo/gravecdb/graph/cypher"
 )
 
 // Query represents a parsed Cypher-like query
@@ -104,8 +106,9 @@ type PathFunction struct {
 
 // NodePattern represents a node in the pattern
 type NodePattern struct {
-	Variable string   // e.g., "a"
-	Labels   []string // e.g., ["Person"]
+	Variable   string                 // e.g., "a"
+	Labels     []string               // e.g., ["Person"]
+	Properties map[string]interface{} // inline property constraints e.g., {name: "Alice"}
 }
 
 // RelPattern represents a relationship in the pattern
@@ -147,6 +150,10 @@ type QueryResult struct {
 	Rows    []map[string]interface{}
 }
 
+// UseNewParser controls whether to use the new Cypher parser
+// Set to true to use the new recursive descent parser
+var UseNewParser = true
+
 // ParseQuery parses a Cypher-like query string
 // Supports queries like:
 //   MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE a.name = "Alice" RETURN a, b
@@ -154,6 +161,180 @@ type QueryResult struct {
 //   MATCH (p:Person) WHERE p.name = "Alice" SET p.age = 29
 //   MATCH (p:Person) WHERE p.name = "Alice" DELETE p
 func ParseQuery(queryStr string) (*Query, error) {
+	if UseNewParser {
+		return parseQueryWithNewParser(queryStr)
+	}
+	return parseQueryLegacy(queryStr)
+}
+
+// parseQueryWithNewParser uses the new Cypher parser
+func parseQueryWithNewParser(queryStr string) (*Query, error) {
+	gq, err := cypher.ParseToGraph(queryStr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert cypher.GraphQuery to Query
+	return convertGraphQueryToQuery(gq), nil
+}
+
+// convertGraphQueryToQuery converts the new parser output to the old Query format
+func convertGraphQueryToQuery(gq *cypher.GraphQuery) *Query {
+	q := &Query{
+		QueryType:   gq.QueryType,
+		IsPathQuery: gq.IsPathQuery,
+	}
+
+	// Convert MatchPattern
+	if gq.MatchPattern != nil {
+		q.MatchPattern = &MatchPattern{
+			Nodes:         make([]NodePattern, len(gq.MatchPattern.Nodes)),
+			Relationships: make([]RelPattern, len(gq.MatchPattern.Relationships)),
+		}
+		for i, n := range gq.MatchPattern.Nodes {
+			q.MatchPattern.Nodes[i] = NodePattern{
+				Variable:   n.Variable,
+				Labels:     n.Labels,
+				Properties: n.Properties,
+			}
+		}
+		for i, r := range gq.MatchPattern.Relationships {
+			q.MatchPattern.Relationships[i] = RelPattern{
+				Variable:  r.Variable,
+				Types:     r.Types,
+				FromIndex: r.FromIndex,
+				ToIndex:   r.ToIndex,
+				Direction: r.Direction,
+			}
+		}
+		if gq.MatchPattern.PathFunction != nil {
+			pf := gq.MatchPattern.PathFunction
+			q.MatchPattern.PathFunction = &PathFunction{
+				Function: pf.Function,
+				Variable: pf.Variable,
+				StartPattern: NodePattern{
+					Variable:   pf.StartPattern.Variable,
+					Labels:     pf.StartPattern.Labels,
+					Properties: pf.StartPattern.Properties,
+				},
+				EndPattern: NodePattern{
+					Variable:   pf.EndPattern.Variable,
+					Labels:     pf.EndPattern.Labels,
+					Properties: pf.EndPattern.Properties,
+				},
+				RelTypes: pf.RelTypes,
+				MaxDepth: pf.MaxDepth,
+			}
+		}
+	}
+
+	// Convert CreateClause
+	if gq.CreateClause != nil {
+		q.CreateClause = &CreateClause{
+			Nodes:         make([]CreateNode, len(gq.CreateClause.Nodes)),
+			Relationships: make([]CreateRelationship, len(gq.CreateClause.Relationships)),
+		}
+		for i, n := range gq.CreateClause.Nodes {
+			q.CreateClause.Nodes[i] = CreateNode{
+				Variable:   n.Variable,
+				Labels:     n.Labels,
+				Properties: n.Properties,
+			}
+		}
+		for i, r := range gq.CreateClause.Relationships {
+			q.CreateClause.Relationships[i] = CreateRelationship{
+				Variable:   r.Variable,
+				Type:       r.Type,
+				FromVar:    r.FromVar,
+				ToVar:      r.ToVar,
+				Properties: r.Properties,
+			}
+		}
+	}
+
+	// Convert SetClause
+	if gq.SetClause != nil {
+		q.SetClause = &SetClause{
+			Updates: make([]PropertyUpdate, len(gq.SetClause.Updates)),
+		}
+		for i, u := range gq.SetClause.Updates {
+			q.SetClause.Updates[i] = PropertyUpdate{
+				Variable: u.Variable,
+				Property: u.Property,
+				Value:    u.Value,
+			}
+		}
+	}
+
+	// Convert DeleteClause
+	if gq.DeleteClause != nil {
+		q.DeleteClause = &DeleteClause{
+			Variables: gq.DeleteClause.Variables,
+			Detach:    gq.DeleteClause.Detach,
+		}
+	}
+
+	// Convert WhereClause
+	if gq.WhereClause != nil {
+		q.WhereClause = &WhereClause{
+			Conditions: make([]Condition, len(gq.WhereClause.Conditions)),
+		}
+		for i, c := range gq.WhereClause.Conditions {
+			q.WhereClause.Conditions[i] = Condition{
+				Variable: c.Variable,
+				Property: c.Property,
+				Operator: c.Operator,
+				Value:    c.Value,
+			}
+		}
+	}
+
+	// Convert ReturnClause
+	if gq.ReturnClause != nil {
+		q.ReturnClause = &ReturnClause{
+			Items: make([]ReturnItem, len(gq.ReturnClause.Items)),
+		}
+		for i, item := range gq.ReturnClause.Items {
+			q.ReturnClause.Items[i] = ReturnItem{
+				Variable: item.Variable,
+				Property: item.Property,
+			}
+		}
+	}
+
+	// Convert TimeClause
+	if gq.TimeClause != nil {
+		q.TimeClause = &TimeClause{
+			Mode:      gq.TimeClause.Mode,
+			Timestamp: gq.TimeClause.Timestamp,
+		}
+	}
+
+	// Convert EmbedClause
+	if gq.EmbedClause != nil {
+		q.EmbedClause = &EmbedClause{
+			Variable: gq.EmbedClause.Variable,
+			Mode:     gq.EmbedClause.Mode,
+			Text:     gq.EmbedClause.Text,
+			Property: gq.EmbedClause.Property,
+		}
+	}
+
+	// Convert SimilarToClause
+	if gq.SimilarToClause != nil {
+		q.SimilarToClause = &SimilarToClause{
+			Variable:  gq.SimilarToClause.Variable,
+			QueryText: gq.SimilarToClause.QueryText,
+			Limit:     gq.SimilarToClause.Limit,
+			Threshold: gq.SimilarToClause.Threshold,
+		}
+	}
+
+	return q
+}
+
+// parseQueryLegacy is the original regex-based parser
+func parseQueryLegacy(queryStr string) (*Query, error) {
 	queryStr = strings.TrimSpace(queryStr)
 	queryLower := strings.ToLower(queryStr)
 
@@ -176,10 +357,11 @@ func parseMatchQuery(queryStr string) (*Query, error) {
 	query := &Query{QueryType: "MATCH"}
 
 	// Split into clauses
-	matchRegex := regexp.MustCompile(`(?i)MATCH\s+(.+?)(?:\s+WHERE\s+|\s+AT\s+TIME\s+|\s+SIMILAR\s+TO\s+|\s+SET\s+|\s+DELETE\s+|\s+EMBED\s+|\s+RETURN\s+|$)`)
-	whereRegex := regexp.MustCompile(`(?i)WHERE\s+(.+?)(?:\s+AT\s+TIME\s+|\s+SIMILAR\s+TO\s+|\s+SET\s+|\s+DELETE\s+|\s+EMBED\s+|\s+RETURN\s+|$)`)
-	timeRegex := regexp.MustCompile(`(?i)AT\s+TIME\s+(EARLIEST|(\d+))(?:\s+SIMILAR\s+TO\s+|\s+SET\s+|\s+DELETE\s+|\s+EMBED\s+|\s+RETURN\s+|$)`)
-	similarToRegex := regexp.MustCompile(`(?i)SIMILAR\s+TO\s+(.+?)(?:\s+SET\s+|\s+DELETE\s+|\s+EMBED\s+|\s+RETURN\s+|$)`)
+	matchRegex := regexp.MustCompile(`(?i)MATCH\s+(.+?)(?:\s+WHERE\s+|\s+AT\s+TIME\s+|\s+SIMILAR\s+TO\s+|\s+CREATE\s+|\s+SET\s+|\s+DELETE\s+|\s+EMBED\s+|\s+RETURN\s+|$)`)
+	whereRegex := regexp.MustCompile(`(?i)WHERE\s+(.+?)(?:\s+AT\s+TIME\s+|\s+SIMILAR\s+TO\s+|\s+CREATE\s+|\s+SET\s+|\s+DELETE\s+|\s+EMBED\s+|\s+RETURN\s+|$)`)
+	timeRegex := regexp.MustCompile(`(?i)AT\s+TIME\s+(EARLIEST|(\d+))(?:\s+SIMILAR\s+TO\s+|\s+CREATE\s+|\s+SET\s+|\s+DELETE\s+|\s+EMBED\s+|\s+RETURN\s+|$)`)
+	similarToRegex := regexp.MustCompile(`(?i)SIMILAR\s+TO\s+(.+?)(?:\s+CREATE\s+|\s+SET\s+|\s+DELETE\s+|\s+EMBED\s+|\s+RETURN\s+|$)`)
+	createRegex := regexp.MustCompile(`(?i)CREATE\s+(.+?)(?:\s+SET\s+|\s+DELETE\s+|\s+EMBED\s+|\s+RETURN\s+|$)`)
 	embedRegex := regexp.MustCompile(`(?i)EMBED\s+(.+?)(?:\s+RETURN\s+|$)`)
 	setRegex := regexp.MustCompile(`(?i)SET\s+(.+?)(?:\s+EMBED\s+|\s+RETURN\s+|$)`)
 	deleteRegex := regexp.MustCompile(`(?i)(DETACH\s+)?DELETE\s+(.+?)(?:\s+EMBED\s+|\s+RETURN\s+|$)`)
@@ -222,6 +404,16 @@ func parseMatchQuery(queryStr string) (*Query, error) {
 			return nil, fmt.Errorf("error parsing AT TIME: %w", err)
 		}
 		query.TimeClause = timeClause
+	}
+
+	// Parse CREATE clause (optional - for MATCH...CREATE pattern)
+	createMatch := createRegex.FindStringSubmatch(queryStr)
+	if createMatch != nil {
+		createClause, err := parseCreateClause(createMatch[1])
+		if err != nil {
+			return nil, fmt.Errorf("error parsing CREATE: %w", err)
+		}
+		query.CreateClause = createClause
 	}
 
 	// Parse SET clause (optional)
@@ -337,17 +529,26 @@ func parseMatchPattern(pattern string) (*MatchPattern, error) {
 	// Simple pattern parser - supports basic node-relationship-node patterns
 	// Pattern: (node)-[relationship]->(node) or (node)<-[relationship]-(node) or (node)-[relationship]-(node)
 
-	// Find all node patterns: (variable:Label)
-	nodeRegex := regexp.MustCompile(`\(([a-zA-Z_][a-zA-Z0-9_]*)?(?::([a-zA-Z_][a-zA-Z0-9_]*))?\)`)
+	// Find all node patterns: (variable:Label {properties...})
+	nodeRegex := regexp.MustCompile(`\(([a-zA-Z_][a-zA-Z0-9_]*)?(?::([a-zA-Z_][a-zA-Z0-9_]*))?\s*(?:\{([^}]*)\})?\)`)
 	nodeMatches := nodeRegex.FindAllStringSubmatch(pattern, -1)
 
 	for _, match := range nodeMatches {
 		np := NodePattern{
-			Variable: match[1],
-			Labels:   []string{},
+			Variable:   match[1],
+			Labels:     []string{},
+			Properties: make(map[string]interface{}),
 		}
 		if match[2] != "" {
 			np.Labels = append(np.Labels, match[2])
+		}
+		// Parse inline properties
+		if match[3] != "" {
+			props, err := parseProperties(match[3])
+			if err != nil {
+				return nil, fmt.Errorf("error parsing inline properties: %w", err)
+			}
+			np.Properties = props
 		}
 		mp.Nodes = append(mp.Nodes, np)
 	}
@@ -404,8 +605,8 @@ func parsePathFunction(variable, function, innerPattern string) (*PathFunction, 
 	}
 
 	// Parse the inner pattern: (start)-[*|*1..5|:TYPE*]-(end)
-	// Extract start and end node patterns
-	nodeRegex := regexp.MustCompile(`\(([a-zA-Z_][a-zA-Z0-9_]*)?(?::([a-zA-Z_][a-zA-Z0-9_]*))?\)`)
+	// Extract start and end node patterns (with optional properties)
+	nodeRegex := regexp.MustCompile(`\(([a-zA-Z_][a-zA-Z0-9_]*)?(?::([a-zA-Z_][a-zA-Z0-9_]*))?\s*(?:\{([^}]*)\})?\)`)
 	nodeMatches := nodeRegex.FindAllStringSubmatch(innerPattern, -1)
 
 	if len(nodeMatches) < 2 {
@@ -414,20 +615,36 @@ func parsePathFunction(variable, function, innerPattern string) (*PathFunction, 
 
 	// Parse start node
 	pf.StartPattern = NodePattern{
-		Variable: nodeMatches[0][1],
-		Labels:   []string{},
+		Variable:   nodeMatches[0][1],
+		Labels:     []string{},
+		Properties: make(map[string]interface{}),
 	}
 	if nodeMatches[0][2] != "" {
 		pf.StartPattern.Labels = append(pf.StartPattern.Labels, nodeMatches[0][2])
 	}
+	if nodeMatches[0][3] != "" {
+		props, err := parseProperties(nodeMatches[0][3])
+		if err != nil {
+			return nil, fmt.Errorf("error parsing start node properties: %w", err)
+		}
+		pf.StartPattern.Properties = props
+	}
 
 	// Parse end node
 	pf.EndPattern = NodePattern{
-		Variable: nodeMatches[1][1],
-		Labels:   []string{},
+		Variable:   nodeMatches[1][1],
+		Labels:     []string{},
+		Properties: make(map[string]interface{}),
 	}
 	if nodeMatches[1][2] != "" {
 		pf.EndPattern.Labels = append(pf.EndPattern.Labels, nodeMatches[1][2])
+	}
+	if nodeMatches[1][3] != "" {
+		props, err := parseProperties(nodeMatches[1][3])
+		if err != nil {
+			return nil, fmt.Errorf("error parsing end node properties: %w", err)
+		}
+		pf.EndPattern.Properties = props
 	}
 
 	// Parse variable-length relationship: -[*]-, -[*1..5]-, -[:TYPE*]-, etc.
