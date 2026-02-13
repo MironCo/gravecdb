@@ -3,15 +3,22 @@ package messages
 
 import "github.com/MironCo/gravecdb/bolt/packstream"
 
-// Message signatures (Bolt v1)
+// Message signatures (Bolt v1-v4)
 const (
 	// Client messages
 	InitSignature       = 0x01
+	HelloSignature      = 0x01 // Bolt 3+ renamed INIT to HELLO
+	GoodbyeSignature    = 0x02 // Bolt 3+ clean disconnect
 	RunSignature        = 0x10
 	PullAllSignature    = 0x3F
+	PullSignature       = 0x3F // Bolt 4+ (same as PULL_ALL for compatibility)
 	DiscardAllSignature = 0x2F
+	DiscardSignature    = 0x2F // Bolt 4+ (same as DISCARD_ALL for compatibility)
 	ResetSignature      = 0x0F
 	AckFailureSignature = 0x0E
+	BeginSignature      = 0x11 // Bolt 3+ transactions
+	CommitSignature     = 0x12
+	RollbackSignature   = 0x13
 
 	// Server messages
 	SuccessSignature = 0x70

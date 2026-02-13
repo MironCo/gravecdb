@@ -180,18 +180,26 @@ func (c *Connection) handleMessage() error {
 	}
 
 	switch raw.Sig {
-	case messages.InitSignature:
+	case messages.InitSignature: // Also HelloSignature (same value)
 		return c.handleInit(raw)
+	case messages.GoodbyeSignature:
+		return io.EOF // Clean disconnect
 	case messages.RunSignature:
 		return c.handleRun(raw)
-	case messages.PullAllSignature:
+	case messages.PullAllSignature: // Also PullSignature
 		return c.handlePullAll()
-	case messages.DiscardAllSignature:
+	case messages.DiscardAllSignature: // Also DiscardSignature
 		return c.handleDiscardAll()
 	case messages.ResetSignature:
 		return c.handleReset()
 	case messages.AckFailureSignature:
 		return c.handleAckFailure()
+	case messages.BeginSignature:
+		return c.handleBegin()
+	case messages.CommitSignature:
+		return c.handleCommit()
+	case messages.RollbackSignature:
+		return c.handleRollback()
 	default:
 		return fmt.Errorf("unknown message signature: 0x%02X", raw.Sig)
 	}
@@ -330,6 +338,20 @@ func (c *Connection) handleReset() error {
 
 func (c *Connection) handleAckFailure() error {
 	c.failed = false
+	return c.sendSuccess(map[string]interface{}{})
+}
+
+// Transaction stubs - we don't support real transactions yet, but accept the messages
+func (c *Connection) handleBegin() error {
+	// Auto-commit mode - just acknowledge
+	return c.sendSuccess(map[string]interface{}{})
+}
+
+func (c *Connection) handleCommit() error {
+	return c.sendSuccess(map[string]interface{}{})
+}
+
+func (c *Connection) handleRollback() error {
 	return c.sendSuccess(map[string]interface{}{})
 }
 

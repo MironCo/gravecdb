@@ -7,6 +7,62 @@ import (
 	"time"
 )
 
+// valuesEqual compares two values for equality, handling type differences
+func valuesEqual(a, b interface{}) bool {
+	if a == b {
+		return true
+	}
+
+	// Handle numeric comparisons (int vs float vs int64, etc.)
+	aNum, aIsNum := toFloat64ForCompare(a)
+	bNum, bIsNum := toFloat64ForCompare(b)
+	if aIsNum && bIsNum {
+		return aNum == bNum
+	}
+
+	// Handle string comparisons
+	aStr, aIsStr := a.(string)
+	bStr, bIsStr := b.(string)
+	if aIsStr && bIsStr {
+		return aStr == bStr
+	}
+
+	// Try fmt.Sprintf as last resort for comparison
+	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
+}
+
+// toFloat64ForCompare converts numeric types to float64 for comparison
+func toFloat64ForCompare(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case int:
+		return float64(n), true
+	case int8:
+		return float64(n), true
+	case int16:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case uint:
+		return float64(n), true
+	case uint8:
+		return float64(n), true
+	case uint16:
+		return float64(n), true
+	case uint32:
+		return float64(n), true
+	case uint64:
+		return float64(n), true
+	case float32:
+		return float64(n), true
+	case float64:
+		return n, true
+	default:
+		return 0, false
+	}
+}
+
 // Embedder interface for generating embeddings
 type Embedder interface {
 	Embed(text string) ([]float32, error)
@@ -269,21 +325,32 @@ func (g *Graph) extendMatch(currentMatch Match, pattern *MatchPattern, relIndex 
 
 // getCandidateNodes returns all nodes that match a node pattern
 func (g *Graph) getCandidateNodes(pattern NodePattern) []*Node {
-	candidates := []*Node{}
+	var rawCandidates []*Node
 
 	if len(pattern.Labels) > 0 {
 		// Get nodes by label
 		for _, label := range pattern.Labels {
 			nodes := g.getNodesByLabelUnlocked(label)
-			candidates = append(candidates, nodes...)
+			rawCandidates = append(rawCandidates, nodes...)
 		}
 	} else {
 		// Get all nodes
 		for _, node := range g.nodes {
-			candidates = append(candidates, node)
+			rawCandidates = append(rawCandidates, node)
 		}
 	}
 
+	// Filter by inline property constraints
+	if len(pattern.Properties) == 0 {
+		return rawCandidates
+	}
+
+	candidates := []*Node{}
+	for _, node := range rawCandidates {
+		if g.nodeMatchesPattern(node, pattern) {
+			candidates = append(candidates, node)
+		}
+	}
 	return candidates
 }
 
@@ -311,8 +378,8 @@ func (g *Graph) nodeMatchesPattern(node *Node, pattern NodePattern) bool {
 		if !exists {
 			return false
 		}
-		// Simple equality check
-		if actualValue != expectedValue {
+		// Compare values (handle type differences)
+		if !valuesEqual(actualValue, expectedValue) {
 			return false
 		}
 	}
