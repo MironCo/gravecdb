@@ -135,13 +135,26 @@ type Condition struct {
 
 // ReturnClause specifies what to return
 type ReturnClause struct {
-	Items []ReturnItem
+	Items    []ReturnItem
+	Distinct bool        // RETURN DISTINCT
+	OrderBy  []OrderItem // ORDER BY clause
+	Skip     int         // SKIP n
+	Limit    int         // LIMIT n (0 = no limit)
 }
 
 // ReturnItem represents a single return item
 type ReturnItem struct {
-	Variable string // e.g., "a"
-	Property string // e.g., "name" (empty string means return whole node)
+	Variable    string // e.g., "a"
+	Property    string // e.g., "name" (empty string means return whole node)
+	Aggregation string // e.g., "COUNT", "SUM", "AVG", "MIN", "MAX", "COLLECT" (empty = no aggregation)
+	Alias       string // AS alias
+}
+
+// OrderItem represents an ORDER BY item
+type OrderItem struct {
+	Variable   string
+	Property   string
+	Descending bool // true for DESC, false for ASC
 }
 
 // QueryResult represents the result of executing a query
@@ -292,13 +305,26 @@ func convertGraphQueryToQuery(gq *cypher.GraphQuery) *Query {
 	// Convert ReturnClause
 	if gq.ReturnClause != nil {
 		q.ReturnClause = &ReturnClause{
-			Items: make([]ReturnItem, len(gq.ReturnClause.Items)),
+			Items:    make([]ReturnItem, len(gq.ReturnClause.Items)),
+			Distinct: gq.ReturnClause.Distinct,
+			Skip:     gq.ReturnClause.Skip,
+			Limit:    gq.ReturnClause.Limit,
 		}
 		for i, item := range gq.ReturnClause.Items {
 			q.ReturnClause.Items[i] = ReturnItem{
-				Variable: item.Variable,
-				Property: item.Property,
+				Variable:    item.Variable,
+				Property:    item.Property,
+				Aggregation: item.Aggregation,
+				Alias:       item.Alias,
 			}
+		}
+		// Convert OrderBy
+		for _, orderItem := range gq.ReturnClause.OrderBy {
+			q.ReturnClause.OrderBy = append(q.ReturnClause.OrderBy, OrderItem{
+				Variable:   orderItem.Variable,
+				Property:   orderItem.Property,
+				Descending: orderItem.Descending,
+			})
 		}
 	}
 

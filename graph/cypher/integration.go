@@ -2,6 +2,7 @@ package cypher
 
 import (
 	"fmt"
+	"strings"
 )
 
 // ParseToGraph converts the new parser output to graph.Query compatible structures
@@ -106,12 +107,24 @@ type GraphCondition struct {
 }
 
 type GraphReturnClause struct {
-	Items []GraphReturnItem
+	Items    []GraphReturnItem
+	Distinct bool
+	OrderBy  []GraphOrderItem
+	Skip     int
+	Limit    int
 }
 
 type GraphReturnItem struct {
-	Variable string
-	Property string
+	Variable    string
+	Property    string
+	Aggregation string // COUNT, SUM, AVG, MIN, MAX, COLLECT
+	Alias       string
+}
+
+type GraphOrderItem struct {
+	Variable   string
+	Property   string
+	Descending bool
 }
 
 type GraphTimeClause struct {
@@ -406,26 +419,81 @@ func extractGraphConditions(expr Expression) ([]GraphCondition, error) {
 
 func convertReturnToGraph(r *ReturnClause) *GraphReturnClause {
 	gr := &GraphReturnClause{
-		Items: []GraphReturnItem{},
+		Items:    []GraphReturnItem{},
+		Distinct: r.Distinct,
 	}
 
+	// Convert SKIP
+	if r.Skip != nil {
+		if intLit, ok := r.Skip.(*IntegerLiteral); ok {
+			gr.Skip = int(intLit.Value)
+		}
+	}
+
+	// Convert LIMIT
+	if r.Limit != nil {
+		if intLit, ok := r.Limit.(*IntegerLiteral); ok {
+			gr.Limit = int(intLit.Value)
+		}
+	}
+
+	// Convert ORDER BY
+	for _, orderItem := range r.OrderBy {
+		goi := GraphOrderItem{
+			Descending: orderItem.Descending,
+		}
+		switch e := orderItem.Expression.(type) {
+		case *Identifier:
+			goi.Variable = e.Name
+		case *PropertyAccess:
+			if ident, ok := e.Object.(*Identifier); ok {
+				goi.Variable = ident.Name
+			}
+			goi.Property = e.Property
+		}
+		gr.OrderBy = append(gr.OrderBy, goi)
+	}
+
+	// Convert return items
 	for _, item := range r.Items {
 		gi := GraphReturnItem{}
 
-		switch e := item.Expression.(type) {
-		case *Identifier:
-			gi.Variable = e.Name
-		case *PropertyAccess:
-			if ident, ok := e.Object.(*Identifier); ok {
-				gi.Variable = ident.Name
+		// Check if it's a function call (aggregation)
+		if fc, ok := item.Expression.(*FunctionCall); ok {
+			gi.Aggregation = strings.ToUpper(fc.Name)
+			// Get the argument (e.g., COUNT(p) -> p)
+			if len(fc.Arguments) > 0 {
+				switch arg := fc.Arguments[0].(type) {
+				case *Identifier:
+					gi.Variable = arg.Name
+				case *PropertyAccess:
+					if ident, ok := arg.Object.(*Identifier); ok {
+						gi.Variable = ident.Name
+					}
+					gi.Property = arg.Property
+				case *Star:
+					gi.Variable = "*"
+				}
+			} else if gi.Aggregation == "COUNT" {
+				// COUNT() with no args is same as COUNT(*)
+				gi.Variable = "*"
 			}
-			gi.Property = e.Property
-		case *Star:
-			gi.Variable = "*"
+		} else {
+			switch e := item.Expression.(type) {
+			case *Identifier:
+				gi.Variable = e.Name
+			case *PropertyAccess:
+				if ident, ok := e.Object.(*Identifier); ok {
+					gi.Variable = ident.Name
+				}
+				gi.Property = e.Property
+			case *Star:
+				gi.Variable = "*"
+			}
 		}
 
 		if item.Alias != "" {
-			gi.Variable = item.Alias
+			gi.Alias = item.Alias
 		}
 
 		gr.Items = append(gr.Items, gi)

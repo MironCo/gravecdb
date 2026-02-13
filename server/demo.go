@@ -549,6 +549,103 @@ func loadDemoData() {
 			log.Printf("  %s: %d -> %d (%s)", company, earliestCount, currentCount, changeStr)
 		}
 
+		// ========== AGGREGATION & ORDERING DEMO ==========
+		log.Println("")
+		log.Println("========================================")
+		log.Println("  AGGREGATION & ORDERING DEMO")
+		log.Println("========================================")
+
+		// ---- COUNT ----
+		log.Println("")
+		log.Println("--- COUNT Example ---")
+		result, err = conn.Query(`MATCH (p:Person) RETURN COUNT(p) AS total_people`)
+		if err != nil {
+			log.Printf("Failed COUNT query: %v", err)
+		} else {
+			for _, row := range result.Rows {
+				log.Printf("Total people: %v", row["total_people"])
+			}
+		}
+
+		// ---- COUNT per company ----
+		log.Println("")
+		log.Println("--- COUNT with GROUP BY (employees per company) ---")
+		result, err = conn.Query(`MATCH (p:Person)-[:WORKS_AT]->(c:Company) RETURN c.name, COUNT(p) AS employees`)
+		if err != nil {
+			log.Printf("Failed COUNT per company query: %v", err)
+		} else {
+			for _, row := range result.Rows {
+				log.Printf("  %v: %v employees", row["c.name"], row["employees"])
+			}
+		}
+
+		// ---- COLLECT ----
+		log.Println("")
+		log.Println("--- COLLECT Example (employee names per company) ---")
+		result, err = conn.Query(`MATCH (p:Person)-[:WORKS_AT]->(c:Company) RETURN c.name, COLLECT(p.name) AS team`)
+		if err != nil {
+			log.Printf("Failed COLLECT query: %v", err)
+		} else {
+			for _, row := range result.Rows {
+				log.Printf("  %v team: %v", row["c.name"], row["team"])
+			}
+		}
+
+		// ---- ORDER BY ----
+		log.Println("")
+		log.Println("--- ORDER BY Example (people by name) ---")
+		result, err = conn.Query(`MATCH (p:Person) RETURN p.name ORDER BY p.name`)
+		if err != nil {
+			log.Printf("Failed ORDER BY query: %v", err)
+		} else {
+			names := []string{}
+			for _, row := range result.Rows {
+				names = append(names, fmt.Sprintf("%v", row["p.name"]))
+			}
+			log.Printf("  Alphabetical: %v", names)
+		}
+
+		// ---- ORDER BY DESC with LIMIT ----
+		log.Println("")
+		log.Println("--- ORDER BY DESC with LIMIT ---")
+		result, err = conn.Query(`MATCH (p:Person) RETURN p.name ORDER BY p.name DESC LIMIT 3`)
+		if err != nil {
+			log.Printf("Failed ORDER BY DESC LIMIT query: %v", err)
+		} else {
+			names := []string{}
+			for _, row := range result.Rows {
+				names = append(names, fmt.Sprintf("%v", row["p.name"]))
+			}
+			log.Printf("  Last 3 alphabetically: %v", names)
+		}
+
+		// ---- SKIP and LIMIT (pagination) ----
+		log.Println("")
+		log.Println("--- SKIP and LIMIT (pagination) ---")
+		result, err = conn.Query(`MATCH (p:Person) RETURN p.name ORDER BY p.name SKIP 2 LIMIT 3`)
+		if err != nil {
+			log.Printf("Failed SKIP LIMIT query: %v", err)
+		} else {
+			names := []string{}
+			for _, row := range result.Rows {
+				names = append(names, fmt.Sprintf("%v", row["p.name"]))
+			}
+			log.Printf("  Page 2 (skip 2, limit 3): %v", names)
+		}
+
+		// ---- DISTINCT ----
+		log.Println("")
+		log.Println("--- DISTINCT Example (unique roles) ---")
+		result, err = conn.Query(`MATCH (p:Person) RETURN DISTINCT p.role`)
+		if err != nil {
+			log.Printf("Failed DISTINCT query: %v", err)
+		} else {
+			log.Printf("  Unique roles: %d", len(result.Rows))
+			for _, row := range result.Rows {
+				log.Printf("    - %v", row["p.role"])
+			}
+		}
+
 		// ---- Summary ----
 		log.Println("")
 		log.Println("========== TEMPORAL SUMMARY ==========")
