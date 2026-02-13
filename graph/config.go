@@ -18,6 +18,9 @@ type Config struct {
 
 	// Embedder configuration (optional)
 	EmbedderURL string // e.g., "ollama://localhost:11434/nomic-embed-text"
+
+	// Storage backend ("bolt" or "wal", defaults to "bolt")
+	StorageBackend string
 }
 
 // ParseDSN parses a connection string into a Config
@@ -85,6 +88,8 @@ func ParseDSN(dsn string) (*Config, error) {
 				switch kv[0] {
 				case "embedder":
 					cfg.EmbedderURL = kv[1]
+				case "backend", "storage":
+					cfg.StorageBackend = kv[1]
 				}
 			}
 		}
@@ -117,7 +122,18 @@ func (cfg *Config) Open() (*Graph, error) {
 	if cfg.DataDir == "" {
 		return NewGraph(), nil
 	}
-	return NewGraphWithPersistence(cfg.DataDir)
+
+	// Default to bbolt if not specified
+	if cfg.StorageBackend == "" || cfg.StorageBackend == "bolt" {
+		return NewGraphWithBolt(cfg.DataDir)
+	}
+
+	// Fall back to WAL for backwards compatibility
+	if cfg.StorageBackend == "wal" {
+		return NewGraphWithPersistence(cfg.DataDir)
+	}
+
+	return nil, fmt.Errorf("unknown storage backend: %s (use 'bolt' or 'wal')", cfg.StorageBackend)
 }
 
 // RequiresAuth returns true if authentication is configured

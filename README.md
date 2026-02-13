@@ -57,7 +57,7 @@ Open your browser to `http://localhost:5173`
 - **Vector Embeddings** - Versioned semantic search with Ollama or OpenAI
 - **Soft Deletes** - All data preserved for historical queries (ValidFrom/ValidTo timestamps)
 - **Cypher-like Query Language** - Pattern matching with WHERE clauses and semantic search
-- **Disk Persistence** - Write-Ahead Log (WAL) + Snapshots for durability
+- **Disk Persistence** - BoltDB backend with ACID transactions (WAL mode also available)
 - **Interactive Visualization** - Real-time graph visualization with time-travel slider
 - **Path-Finding Algorithms** - Shortest path, all paths, and path existence checks
 
@@ -117,7 +117,7 @@ gravecdb://[username:password@][host][:port]/[datadir]?[options]
 
 Examples:
 ```bash
-# Local persistence
+# Local persistence (uses BoltDB by default)
 gravecdb:///data
 
 # With authentication
@@ -128,6 +128,9 @@ gravecdb://0.0.0.0:8080/data?embedder=ollama://localhost:11434/nomic-embed-text
 
 # With OpenAI embeddings
 gravecdb://0.0.0.0:8080/data?embedder=openai://
+
+# Use WAL backend (legacy mode)
+gravecdb:///data?backend=wal
 
 # In-memory only (no persistence)
 gravecdb://:memory:
@@ -267,7 +270,8 @@ MATCH path = shortestPath((a:Person)-[*]-(b:Person)) RETURN path
 │   ├── relationship.go   # Relationship implementation
 │   ├── graph.go          # Core graph database
 │   ├── temporal.go       # Temporal query support
-│   └── persistence.go    # WAL and snapshots
+│   ├── bbolt_store.go    # BoltDB persistence backend
+│   └── persistence.go    # WAL persistence (legacy)
 ├── server/
 │   └── main.go          # HTTP server with API
 ├── web-ui/              # Vue + Vite frontend
@@ -280,7 +284,7 @@ MATCH path = shortestPath((a:Person)-[*]-(b:Person)) RETURN path
 │   ├── basic/           # Basic graph operations demo
 │   ├── temporal/        # Time-travel demo
 │   └── persistence/     # Persistence demo
-├── data/                # Database files (WAL + snapshots)
+├── data/                # Database files (gravecdb.db)
 └── Makefile             # Build commands
 ```
 
@@ -306,6 +310,13 @@ The temporal view filters nodes/relationships to only show those valid at the qu
 
 ### Persistence
 
+**BoltDB Backend (Default):**
+- **ACID Transactions** - Atomic, consistent, isolated, durable writes
+- **B+ Tree Storage** - Fast O(log n) lookups and range scans
+- **Single File** - Database stored in `gravecdb.db`
+- **MVCC** - Multiple readers don't block writers
+
+**WAL Backend (Legacy):**
 - **Write-Ahead Log** - Every operation logged before being applied
 - **Snapshots** - Periodic full state saves
 - **Recovery** - Load snapshot + replay WAL entries
@@ -315,7 +326,7 @@ The temporal view filters nodes/relationships to only show those valid at the qu
 - **Backend**: Go + Gin
 - **Frontend**: Vue 3 + Vite + Cytoscape.js
 - **Embeddings**: Ollama (local) or OpenAI (cloud)
-- **Persistence**: JSON WAL + Binary Snapshots (gob)
+- **Persistence**: BoltDB (default) or WAL + Snapshots
 
 ## Development
 

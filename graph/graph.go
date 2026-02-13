@@ -13,7 +13,8 @@ type Graph struct {
 	nodesByLabel  map[string]map[string]*Node // label -> nodeID -> Node
 	embeddings    *EmbeddingStore             // Vector embeddings for semantic search
 	mu            sync.RWMutex
-	wal           *WAL // Write-Ahead Log for persistence (nil if persistence disabled)
+	wal           *WAL        // Write-Ahead Log for persistence (nil if persistence disabled)
+	boltStore     *BoltStore  // bbolt storage backend (nil if using WAL or no persistence)
 }
 
 // NewGraph creates a new graph database instance without persistence
@@ -104,6 +105,83 @@ func NewGraphWithMaxPerformance(dataDir string) (*Graph, error) {
 	}
 
 	return g, nil
+}
+
+// NewGraphWithBolt creates a new graph database with bbolt persistence
+// This is the recommended persistence layer - provides ACID transactions and MVCC
+// dataDir: directory where gravecdb.db file will be stored
+func NewGraphWithBolt(dataDir string) (*Graph, error) {
+	// Create the bbolt storage backend
+	store, err := NewBoltStore(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create bolt store: %w", err)
+	}
+
+	g := &Graph{
+		nodes:         make(map[string]*Node),
+		relationships: make(map[string]*Relationship),
+		nodesByLabel:  make(map[string]map[string]*Node),
+		embeddings:    NewEmbeddingStore(),
+		boltStore:     store,
+	}
+
+	// Load existing data from bbolt into memory
+	if err := g.loadFromBolt(); err != nil {
+		return nil, fmt.Errorf("failed to load from bolt: %w", err)
+	}
+
+	return g, nil
+}
+
+// loadFromBolt loads all data from bbolt into memory
+func (g *Graph) loadFromBolt() error {
+	if g.boltStore == nil {
+		return nil
+	}
+
+	// Load all nodes
+	nodes, err := g.boltStore.GetAllNodes()
+	if err != nil {
+		return fmt.Errorf("failed to load nodes: %w", err)
+	}
+
+	for _, node := range nodes {
+		g.nodes[node.ID] = node
+
+		// Rebuild label index
+		for _, label := range node.Labels {
+			if g.nodesByLabel[label] == nil {
+				g.nodesByLabel[label] = make(map[string]*Node)
+			}
+			g.nodesByLabel[label][node.ID] = node
+		}
+	}
+
+	// Load all relationships
+	rels, err := g.boltStore.GetAllRelationships()
+	if err != nil {
+		return fmt.Errorf("failed to load relationships: %w", err)
+	}
+
+	for _, rel := range rels {
+		g.relationships[rel.ID] = rel
+	}
+
+	// Load all embeddings
+	embeddingsMap, err := g.boltStore.GetAllEmbeddings()
+	if err != nil {
+		return fmt.Errorf("failed to load embeddings: %w", err)
+	}
+
+	// Directly set the embeddings map (matches EmbeddingStore's internal structure)
+	for nodeID, embeddings := range embeddingsMap {
+		for _, emb := range embeddings {
+			// Re-add each embedding to maintain versioning
+			g.embeddings.Add(nodeID, emb.Vector, emb.Model)
+		}
+	}
+
+	return nil
 }
 
 // recover rebuilds the graph state from disk
@@ -279,10 +357,13 @@ func (g *Graph) Snapshot() error {
 // Close flushes any pending writes and closes the database
 // Should be called when shutting down to ensure all data is saved
 func (g *Graph) Close() error {
-	if g.wal == nil {
-		return nil
+	if g.wal != nil {
+		return g.wal.Close()
 	}
-	return g.wal.Close()
+	if g.boltStore != nil {
+		return g.boltStore.Close()
+	}
+	return nil
 }
 
 // CreateNode adds a node to the graph
@@ -324,6 +405,18 @@ func (g *Graph) createNodeUnlocked(labels ...string) *Node {
 			g.nodesByLabel[label] = make(map[string]*Node)
 		}
 		g.nodesByLabel[label][node.ID] = node
+	}
+
+	// Persist to bbolt if enabled
+	if g.boltStore != nil {
+		if err := g.boltStore.SaveNode(node); err != nil {
+			// Rollback in-memory changes on persistence failure
+			delete(g.nodes, node.ID)
+			for _, label := range labels {
+				delete(g.nodesByLabel[label], node.ID)
+			}
+			panic(fmt.Sprintf("failed to persist node to bbolt: %v", err))
+		}
 	}
 
 	return node
@@ -387,6 +480,15 @@ func (g *Graph) createRelationshipUnlocked(relType string, fromNodeID, toNodeID 
 
 	// Apply the operation to the in-memory graph
 	g.relationships[rel.ID] = rel
+
+	// Persist to bbolt if enabled
+	if g.boltStore != nil {
+		if err := g.boltStore.SaveRelationship(rel); err != nil {
+			// Rollback in-memory changes
+			delete(g.relationships, rel.ID)
+			return nil, fmt.Errorf("failed to persist relationship to bbolt: %w", err)
+		}
+	}
 
 	return rel, nil
 }
@@ -500,6 +602,19 @@ func (g *Graph) deleteNodeUnlocked(nodeID string) error {
 	for _, rel := range g.relationships {
 		if (rel.FromNodeID == nodeID || rel.ToNodeID == nodeID) && rel.IsCurrentlyValid() {
 			rel.ValidTo = &now
+			// Persist each relationship deletion to bbolt
+			if g.boltStore != nil {
+				if err := g.boltStore.SaveRelationship(rel); err != nil {
+					return fmt.Errorf("failed to persist relationship deletion to bbolt: %w", err)
+				}
+			}
+		}
+	}
+
+	// Persist node deletion to bbolt if enabled
+	if g.boltStore != nil {
+		if err := g.boltStore.DeleteNode(nodeID, now); err != nil {
+			return fmt.Errorf("failed to persist node deletion to bbolt: %w", err)
 		}
 	}
 
@@ -546,6 +661,14 @@ func (g *Graph) deleteRelationshipUnlocked(relID string) error {
 
 	// Soft delete: set ValidTo timestamp instead of removing from map
 	rel.ValidTo = &now
+
+	// Persist to bbolt if enabled
+	if g.boltStore != nil {
+		if err := g.boltStore.DeleteRelationship(relID, now); err != nil {
+			return fmt.Errorf("failed to persist relationship deletion to bbolt: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -583,6 +706,16 @@ func (g *Graph) setNodePropertyUnlocked(nodeID, key string, value interface{}) e
 
 	// Apply the operation to the in-memory node
 	node.Properties[key] = value
+
+	// Persist to bbolt if enabled
+	if g.boltStore != nil {
+		if err := g.boltStore.SaveNode(node); err != nil {
+			// Rollback the property change
+			delete(node.Properties, key)
+			return fmt.Errorf("failed to persist node property to bbolt: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -620,6 +753,16 @@ func (g *Graph) setRelationshipPropertyUnlocked(relID, key string, value interfa
 
 	// Apply the operation to the in-memory relationship
 	rel.Properties[key] = value
+
+	// Persist to bbolt if enabled
+	if g.boltStore != nil {
+		if err := g.boltStore.SaveRelationship(rel); err != nil {
+			// Rollback the property change
+			delete(rel.Properties, key)
+			return fmt.Errorf("failed to persist relationship property to bbolt: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -634,6 +777,16 @@ func (g *Graph) SetNodeEmbedding(nodeID string, vector []float32, model string) 
 	}
 
 	g.embeddings.Add(nodeID, vector, model)
+
+	// Persist to bbolt if enabled (save all embedding versions for this node)
+	if g.boltStore != nil {
+		// Get all versions from embedding store
+		versions := g.embeddings.GetAll(nodeID)
+		if err := g.boltStore.SaveEmbedding(nodeID, versions); err != nil {
+			return fmt.Errorf("failed to persist embedding to bbolt: %w", err)
+		}
+	}
+
 	return nil
 }
 

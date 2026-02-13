@@ -112,6 +112,11 @@ func (s *EmbeddingStore) GetAt(nodeID string, t time.Time) *Embedding {
 	return nil
 }
 
+// GetAll returns all embedding versions for a node
+func (s *EmbeddingStore) GetAll(nodeID string) []*Embedding {
+	return s.embeddings[nodeID]
+}
+
 // SearchResult represents a node with its similarity score
 type SearchResult struct {
 	NodeID     string
