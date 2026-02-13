@@ -15,6 +15,13 @@ const isLoaded = ref(false)
 const isGraphLoading = ref(true)
 const loadGraphTimeout = ref(null)
 
+// Query panel state
+const isQueryPanelOpen = ref(false)
+const queryText = ref('')
+const queryResult = ref(null)
+const queryError = ref(null)
+const isQueryRunning = ref(false)
+
 const currentTimeDisplay = computed(() => {
   if (timelineEvents.value.length === 0) return 'No data'
   const event = timelineEvents.value[currentTimeIndex.value]
@@ -325,6 +332,74 @@ watch(playbackSpeed, () => {
     startPlayback()
   }
 })
+
+// Query panel functions
+function toggleQueryPanel() {
+  isQueryPanelOpen.value = !isQueryPanelOpen.value
+}
+
+async function executeQuery() {
+  if (!queryText.value.trim()) return
+
+  isQueryRunning.value = true
+  queryError.value = null
+  queryResult.value = null
+
+  try {
+    const res = await fetch('/api/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: queryText.value })
+    })
+
+    const data = await res.json()
+
+    if (!res.ok) {
+      queryError.value = data.error || 'Query execution failed'
+    } else {
+      queryResult.value = data
+    }
+  } catch (err) {
+    queryError.value = 'Network error: ' + err.message
+  } finally {
+    isQueryRunning.value = false
+  }
+}
+
+function clearQuery() {
+  queryText.value = ''
+  queryResult.value = null
+  queryError.value = null
+}
+
+function formatCellValue(value) {
+  if (value === null || value === undefined) return 'null'
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value, null, 2)
+    } catch {
+      return String(value)
+    }
+  }
+  return String(value)
+}
+
+// Check if a value is a Node object
+function isNode(value) {
+  return value && typeof value === 'object' && 'ID' in value && 'Labels' in value && 'Properties' in value
+}
+
+// Check if a value is a Relationship object
+function isRelationship(value) {
+  return value && typeof value === 'object' && 'ID' in value && 'Type' in value && 'FromNodeID' in value && 'ToNodeID' in value
+}
+
+// Get display name for a node
+function getNodeDisplayName(node) {
+  if (node.Properties?.name) return node.Properties.name
+  if (node.Labels?.length) return node.Labels[0]
+  return node.ID?.substring(0, 8) || 'Node'
+}
 </script>
 
 <template>
@@ -353,58 +428,163 @@ watch(playbackSpeed, () => {
 
     <div class="controls">
       <div class="controls-inner">
-        <div class="slider-section">
-          <div class="slider-label">
-            <span>Timeline Position</span>
-            <span class="event-counter">Event {{ currentTimeIndex + 1 }} of {{ timelineEvents.length }}</span>
-          </div>
-          <div class="slider-container">
-            <input
-              type="range"
-              :min="0"
-              :max="timelineEvents.length - 1"
-              v-model.number="currentTimeIndex"
-              @input="onTimeSliderChange"
-            />
-          </div>
+        <div class="playback-controls">
+          <button class="control-btn icon-btn" @click="jumpToStart" title="Jump to start">
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M3 3h2v14H3V3zm4 7l10-7v14L7 10z"/>
+            </svg>
+          </button>
+          <button class="control-btn play-btn" @click="togglePlayback">
+            <svg v-if="isPlaying" width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M6 4h3v12H6V4zm5 0h3v12h-3V4z"/>
+            </svg>
+            <svg v-else width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M5 3l12 7-12 7V3z"/>
+            </svg>
+          </button>
+          <button class="control-btn icon-btn" @click="jumpToEnd" title="Jump to end">
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M15 3h2v14h-2V3zM3 10l10 7V3L3 10z"/>
+            </svg>
+          </button>
         </div>
 
-        <div class="controls-row">
-          <div class="playback-controls">
-            <button class="control-btn icon-btn" @click="jumpToStart" title="Jump to start">
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M3 3h2v14H3V3zm4 7l10-7v14L7 10z"/>
-              </svg>
-            </button>
-            <button class="control-btn play-btn" @click="togglePlayback">
-              <svg v-if="isPlaying" width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M6 4h3v12H6V4zm5 0h3v12h-3V4z"/>
-              </svg>
-              <svg v-else width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M5 3l12 7-12 7V3z"/>
-              </svg>
-            </button>
-            <button class="control-btn icon-btn" @click="jumpToEnd" title="Jump to end">
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M15 3h2v14h-2V3zM3 10l10 7V3L3 10z"/>
-              </svg>
-            </button>
-          </div>
+        <div class="slider-section">
+          <input
+            type="range"
+            :min="0"
+            :max="timelineEvents.length - 1"
+            v-model.number="currentTimeIndex"
+            @input="onTimeSliderChange"
+          />
+          <span class="event-counter">{{ currentTimeIndex + 1 }}/{{ timelineEvents.length }}</span>
+        </div>
 
-          <div class="speed-control">
-            <label>Speed</label>
-            <select v-model="playbackSpeed">
-              <option :value="0.5">0.5×</option>
-              <option :value="1">1×</option>
-              <option :value="2">2×</option>
-              <option :value="5">5×</option>
-            </select>
-          </div>
+        <div class="speed-control">
+          <select v-model="playbackSpeed">
+            <option :value="0.5">0.5×</option>
+            <option :value="1">1×</option>
+            <option :value="2">2×</option>
+            <option :value="5">5×</option>
+          </select>
         </div>
       </div>
     </div>
 
     <div class="container">
+      <!-- Query Panel (Left Side) -->
+      <div class="query-panel" :class="{ open: isQueryPanelOpen }">
+        <button class="query-panel-toggle" @click="toggleQueryPanel" :title="isQueryPanelOpen ? 'Collapse' : 'Expand'">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M11.5 1a.5.5 0 01.5.5v1a.5.5 0 01-.5.5H11v1.07a4 4 0 011.555 1.223l.927-.537a.5.5 0 01.683.184l.5.866a.5.5 0 01-.183.683l-.927.536A4 4 0 0114 8a4 4 0 01-.445 1.817l.927.536a.5.5 0 01.183.683l-.5.866a.5.5 0 01-.683.184l-.927-.537A4 4 0 0111 12.93V14h.5a.5.5 0 01.5.5v1a.5.5 0 01-.5.5h-7a.5.5 0 01-.5-.5v-1a.5.5 0 01.5-.5H5v-1.07a4 4 0 01-1.555-1.223l-.927.537a.5.5 0 01-.683-.184l-.5-.866a.5.5 0 01.183-.683l.927-.536A4 4 0 012 8a4 4 0 01.445-1.817l-.927-.536a.5.5 0 01-.183-.683l.5-.866a.5.5 0 01.683-.184l.927.537A4 4 0 015 3.07V2h-.5a.5.5 0 01-.5-.5v-1a.5.5 0 01.5-.5h7zM8 5a3 3 0 100 6 3 3 0 000-6z"/>
+          </svg>
+          <span class="toggle-label">Query</span>
+          <svg class="chevron" width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+            <path d="M4 2l4 4-4 4"/>
+          </svg>
+        </button>
+
+        <div class="query-panel-content">
+          <div class="query-input-section">
+            <label class="query-label">Cypher Query</label>
+            <textarea
+              v-model="queryText"
+              class="query-textarea"
+              placeholder="MATCH (n:Person) RETURN n"
+              rows="6"
+              @keydown.ctrl.enter="executeQuery"
+              @keydown.meta.enter="executeQuery"
+            ></textarea>
+            <div class="query-actions">
+              <button class="query-btn run-btn" @click="executeQuery" :disabled="isQueryRunning || !queryText.trim()">
+                <svg v-if="isQueryRunning" class="spinner-icon" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                  <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="25" stroke-linecap="round"/>
+                </svg>
+                <svg v-else width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M4 2l10 6-10 6V2z"/>
+                </svg>
+                <span>{{ isQueryRunning ? 'Running...' : 'Run' }}</span>
+              </button>
+              <button class="query-btn clear-btn" @click="clearQuery" :disabled="isQueryRunning">
+                Clear
+              </button>
+            </div>
+            <span class="query-hint">Ctrl+Enter to run</span>
+          </div>
+
+          <div class="query-result-section" v-if="queryError || queryResult">
+            <div v-if="queryError" class="query-error">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 1a7 7 0 100 14A7 7 0 008 1zM7 4h2v5H7V4zm0 6h2v2H7v-2z"/>
+              </svg>
+              <span>{{ queryError }}</span>
+            </div>
+
+            <div v-else-if="queryResult" class="query-results">
+              <div class="results-header">
+                <span class="results-count">{{ queryResult.Rows?.length || 0 }} row(s)</span>
+              </div>
+
+              <div class="results-table-wrapper" v-if="queryResult.Columns && queryResult.Rows?.length">
+                <table class="results-table">
+                  <thead>
+                    <tr>
+                      <th v-for="col in queryResult.Columns" :key="col">{{ col }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(row, idx) in queryResult.Rows" :key="idx">
+                      <td v-for="col in queryResult.Columns" :key="col">
+                        <!-- Node Card -->
+                        <div v-if="isNode(row[col])" class="result-node-card">
+                          <div class="result-node-header">
+                            <span class="result-node-icon">●</span>
+                            <span class="result-node-name">{{ getNodeDisplayName(row[col]) }}</span>
+                          </div>
+                          <div class="result-node-labels">
+                            <span class="result-label" v-for="label in row[col].Labels" :key="label">{{ label }}</span>
+                          </div>
+                          <div class="result-node-props" v-if="row[col].Properties && Object.keys(row[col].Properties).length">
+                            <div class="result-prop" v-for="(val, key) in row[col].Properties" :key="key">
+                              <span class="result-prop-key">{{ key }}</span>
+                              <span class="result-prop-val">{{ val }}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <!-- Relationship Card -->
+                        <div v-else-if="isRelationship(row[col])" class="result-rel-card">
+                          <div class="result-rel-header">
+                            <span class="result-rel-icon">→</span>
+                            <span class="result-rel-type">{{ row[col].Type }}</span>
+                          </div>
+                          <div class="result-rel-endpoints">
+                            <span class="result-rel-from">{{ row[col].FromNodeID?.substring(0, 8) }}</span>
+                            <span class="result-rel-arrow">→</span>
+                            <span class="result-rel-to">{{ row[col].ToNodeID?.substring(0, 8) }}</span>
+                          </div>
+                          <div class="result-node-props" v-if="row[col].Properties && Object.keys(row[col].Properties).length">
+                            <div class="result-prop" v-for="(val, key) in row[col].Properties" :key="key">
+                              <span class="result-prop-key">{{ key }}</span>
+                              <span class="result-prop-val">{{ val }}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <!-- Plain Value -->
+                        <span v-else class="cell-value">{{ formatCellValue(row[col]) }}</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div v-else class="no-results">
+                No results returned.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="graph-wrapper">
         <div id="cy"></div>
         <div v-if="isGraphLoading" class="loading-overlay">
@@ -690,34 +870,30 @@ h1 {
 .controls {
   background: var(--surface);
   border-bottom: 1px solid var(--outline);
-  padding: 12px 20px;
+  padding: 6px 20px;
 }
 
 .controls-inner {
   max-width: 1400px;
   margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .slider-section {
-  margin-bottom: 12px;
-}
-
-.slider-label {
+  flex: 1;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
-  font-size: 12px;
-  color: var(--on-surface-variant);
+  gap: 12px;
 }
 
 .event-counter {
-  color: var(--primary);
+  color: var(--on-surface-variant);
+  font-size: 11px;
   font-weight: 500;
-}
-
-.slider-container {
-  position: relative;
+  white-space: nowrap;
+  font-family: 'JetBrains Mono', monospace;
 }
 
 input[type="range"] {
@@ -779,11 +955,11 @@ input[type="range"]::-moz-range-thumb {
   background: var(--surface);
   color: var(--primary);
   border: 1px solid var(--outline);
-  padding: 8px 16px;
+  padding: 6px 12px;
   border-radius: 4px;
   font-family: 'Roboto', sans-serif;
   font-weight: 500;
-  font-size: 14px;
+  font-size: 12px;
   cursor: pointer;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   display: flex;
@@ -861,6 +1037,7 @@ select:focus {
 
 .graph-wrapper {
   flex: 1;
+  min-width: 0;
   position: relative;
   display: flex;
 }
@@ -912,6 +1089,8 @@ select:focus {
 
 .sidebar {
   width: 360px;
+  min-width: 360px;
+  flex-shrink: 0;
   background: var(--surface);
   border-left: 1px solid var(--outline);
   padding: 24px;
@@ -1226,5 +1405,414 @@ select:focus {
   color: var(--secondary);
   font-size: 20px;
   font-weight: 500;
+}
+
+/* Query Panel Styles (Left Side) */
+.query-panel {
+  width: 48px;
+  min-width: 48px;
+  background: var(--surface);
+  border-right: 1px solid var(--outline);
+  display: flex;
+  flex-direction: column;
+  transition: width 0.25s ease, min-width 0.25s ease;
+  overflow: hidden;
+}
+
+.query-panel.open {
+  width: 320px;
+  min-width: 320px;
+}
+
+.query-panel-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--outline);
+  color: var(--on-surface-variant);
+  font-family: 'Noto Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.query-panel-toggle:hover {
+  background: var(--surface-elevated);
+  color: var(--on-surface);
+}
+
+.query-panel-toggle .toggle-label {
+  opacity: 0;
+  width: 0;
+  overflow: hidden;
+  transition: opacity 0.2s, width 0.2s;
+}
+
+.query-panel.open .query-panel-toggle .toggle-label {
+  opacity: 1;
+  width: auto;
+}
+
+.query-panel-toggle .chevron {
+  margin-left: auto;
+  transition: transform 0.25s ease;
+  flex-shrink: 0;
+}
+
+.query-panel.open .query-panel-toggle .chevron {
+  transform: rotate(180deg);
+}
+
+.query-panel-content {
+  flex: 1;
+  padding: 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease;
+}
+
+.query-panel.open .query-panel-content {
+  opacity: 1;
+  visibility: visible;
+}
+
+.query-input-section {
+  margin-bottom: 16px;
+}
+
+.query-label {
+  display: block;
+  font-size: 11px;
+  color: var(--on-surface-variant);
+  margin-bottom: 8px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.query-textarea {
+  width: 100%;
+  padding: 10px;
+  background: var(--background);
+  border: 1px solid var(--outline);
+  border-radius: 4px;
+  color: var(--on-surface);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 120px;
+  transition: border-color 0.2s;
+}
+
+.query-textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.query-textarea::placeholder {
+  color: var(--secondary);
+}
+
+.query-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.query-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-family: 'Noto Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex: 1;
+}
+
+.query-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.run-btn {
+  background: var(--primary);
+  color: var(--surface);
+  border: none;
+}
+
+.run-btn:hover:not(:disabled) {
+  background: var(--primary-dark);
+}
+
+.clear-btn {
+  background: transparent;
+  color: var(--on-surface-variant);
+  border: 1px solid var(--outline);
+  flex: 0;
+  padding: 8px 14px;
+}
+
+.clear-btn:hover:not(:disabled) {
+  background: var(--surface-elevated);
+  color: var(--on-surface);
+}
+
+.query-hint {
+  display: block;
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--secondary);
+  text-align: right;
+}
+
+.spinner-icon {
+  animation: spin 0.8s linear infinite;
+}
+
+.query-result-section {
+  margin-top: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.query-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  background: rgba(255, 100, 100, 0.1);
+  border: 1px solid rgba(255, 100, 100, 0.3);
+  border-radius: 4px;
+  color: #ff6b6b;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.query-error svg {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+}
+
+.query-results {
+  background: var(--background);
+  border: 1px solid var(--outline);
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.results-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--surface-elevated);
+  border-bottom: 1px solid var(--outline);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.results-count {
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.results-table-wrapper {
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.results-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-elevated);
+  padding: 8px 10px;
+  text-align: left;
+  font-weight: 500;
+  color: var(--on-surface-variant);
+  border-bottom: 1px solid var(--outline);
+  white-space: nowrap;
+}
+
+.results-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--outline);
+  color: var(--on-surface);
+  vertical-align: top;
+}
+
+.results-table tbody tr:hover {
+  background: var(--surface-elevated);
+}
+
+.results-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.cell-value {
+  font-family: 'JetBrains Mono', monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 200px;
+  display: block;
+  font-size: 11px;
+}
+
+.no-results {
+  padding: 16px;
+  text-align: center;
+  color: var(--secondary);
+  font-size: 12px;
+}
+
+/* Result Node Card */
+.result-node-card {
+  background: var(--surface-elevated);
+  border: 1px solid var(--outline);
+  border-radius: 6px;
+  padding: 10px;
+  min-width: 140px;
+}
+
+.result-node-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.result-node-icon {
+  color: var(--primary);
+  font-size: 10px;
+}
+
+.result-node-name {
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--on-surface);
+}
+
+.result-node-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.result-label {
+  background: var(--background);
+  border: 1px solid var(--outline);
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 9px;
+  color: var(--on-surface-variant);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.result-node-props {
+  border-top: 1px solid var(--outline);
+  padding-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.result-prop {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+}
+
+.result-prop-key {
+  color: var(--secondary);
+}
+
+.result-prop-val {
+  color: var(--on-surface);
+  font-family: 'JetBrains Mono', monospace;
+  text-align: right;
+  word-break: break-word;
+}
+
+/* Result Relationship Card */
+.result-rel-card {
+  background: var(--surface-elevated);
+  border: 1px solid var(--outline);
+  border-left: 3px solid var(--secondary);
+  border-radius: 6px;
+  padding: 10px;
+  min-width: 140px;
+}
+
+.result-rel-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.result-rel-icon {
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.result-rel-type {
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--on-surface);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.result-rel-endpoints {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.result-rel-from,
+.result-rel-to {
+  color: var(--on-surface-variant);
+  background: var(--background);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.result-rel-arrow {
+  color: var(--secondary);
 }
 </style>

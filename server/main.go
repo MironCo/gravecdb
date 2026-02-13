@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/MironCo/gravecdb/bolt"
 	"github.com/MironCo/gravecdb/graph"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -120,7 +121,19 @@ func main() {
 		api.DELETE("/relationships/:id", deleteRelationship)
 	}
 
-	// Start server
+	// Start Bolt server (Neo4j-compatible protocol on port 7687)
+	boltAddr := os.Getenv("GRAVECDB_BOLT_ADDR")
+	if boltAddr == "" {
+		boltAddr = ":7687"
+	}
+	boltServer := bolt.NewServer(boltAddr, db)
+	go func() {
+		if err := boltServer.Start(); err != nil {
+			fmt.Printf("Bolt server error: %v\n", err)
+		}
+	}()
+
+	// Start HTTP server
 	addr := serverConfig.Address()
 	if serverConfig.TLSCert != "" && serverConfig.TLSKey != "" {
 		fmt.Printf("Starting HTTPS server on %s\n", addr)

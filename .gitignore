@@ -6,9 +6,14 @@ data/
 
 # Build artifacts
 gravecdb
+*.exe
+*.dll
+*.so
+*.dylib
 
 # Frontend build
 web/dist/
+web-ui/dist/
 node_modules/
 
 # IDE
@@ -17,3 +22,12 @@ node_modules/
 
 # OS
 .DS_Store
+Thumbs.db
+
+# Python
+test_bolt/venv/
+__pycache__/
+*.pyc
+
+# Reference code (MIT licensed, kept for reference)
+_bolt_reference/
