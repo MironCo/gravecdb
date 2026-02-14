@@ -1,9 +1,23 @@
-.PHONY: build run server demo-basic demo-temporal demo-persistence demo-pathfinding demo-query demo-temporal-paths demo-embeddings demo-client demo-performance web-dev web-build docker docker-run compose-up compose-down clean
+.PHONY: build build-linux build-all run server demo-basic demo-temporal demo-persistence demo-pathfinding demo-query demo-temporal-paths demo-embeddings demo-client demo-performance web-dev web-build docker docker-run compose-up compose-down clean
 
-# Build the server binary
+# Build the server binary for current platform
 build:
 	@cd server && go build -o ../gravecdb .
 	@echo "Built gravecdb binary in root directory"
+
+# Build for Linux (amd64)
+build-linux:
+	@cd server && GOOS=linux GOARCH=amd64 go build -o ../gravecdb-linux-amd64 .
+	@echo "Built gravecdb-linux-amd64 binary in root directory"
+
+# Build for Linux (arm64)
+build-linux-arm:
+	@cd server && GOOS=linux GOARCH=arm64 go build -o ../gravecdb-linux-arm64 .
+	@echo "Built gravecdb-linux-arm64 binary in root directory"
+
+# Build for all platforms
+build-all: build build-linux build-linux-arm
+	@echo "Built binaries for all platforms"
 
 # Build and run the server
 run: build
