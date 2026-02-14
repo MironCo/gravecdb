@@ -6,7 +6,9 @@ data/
 
 # Build artifacts
 gravecdb
+gravecdb-*
 *.exe
+*.zip
 *.dll
 *.so
 *.dylib
