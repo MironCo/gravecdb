@@ -2,7 +2,7 @@
 
 A temporal graph database with built-in vector embeddings, featuring time-travel queries and real-time visualization.
 
-![GravecDB Preview](docs/gifs/preview.gif)
+https://github.com/user-attachments/assets/docs/videos/preview.mp4
 
 ## Quick Start
 
