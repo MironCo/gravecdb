@@ -1,4 +1,4 @@
-.PHONY: build build-linux build-all run server demo-basic demo-temporal demo-persistence demo-pathfinding demo-query demo-temporal-paths demo-embeddings demo-client demo-performance web-dev web-build docker docker-run compose-up compose-down clean
+.PHONY: build build-linux build-all run server test demo-basic demo-temporal demo-persistence demo-pathfinding demo-query demo-temporal-paths demo-embeddings demo-client demo-performance web-dev web-build docker docker-run compose-up compose-down clean
 
 # Build the server binary for current platform
 build:
@@ -26,6 +26,10 @@ run: build
 # Run the visualization server
 server:
 	@cd server && go run .
+
+# Run all tests
+test:
+	@go test -v ./graph/...
 
 # Run the frontend dev server
 web-dev:

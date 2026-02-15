@@ -117,8 +117,10 @@ func main() {
 		// CRUD operations
 		api.POST("/nodes", createNode)
 		api.POST("/relationships", createRelationship)
+		api.PUT("/nodes/:id/properties", updateNodeProperty)
 		api.DELETE("/nodes/:id", deleteNode)
 		api.DELETE("/relationships/:id", deleteRelationship)
+		api.GET("/debug/versions", debugVersions)
 	}
 
 	// Start Bolt server (Neo4j-compatible protocol on port 7687)
@@ -308,6 +310,27 @@ func createRelationship(c *gin.Context) {
 }
 
 // deleteNode soft-deletes a node
+func updateNodeProperty(c *gin.Context) {
+	id := c.Param("id")
+
+	var req struct {
+		Key   string      `json:"key"`
+		Value interface{} `json:"value"`
+	}
+
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := db.SetNodeProperty(id, req.Key, req.Value); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "property updated"})
+}
+
 func deleteNode(c *gin.Context) {
 	id := c.Param("id")
 	if err := db.DeleteNode(id); err != nil {
@@ -438,24 +461,23 @@ func buildGraphResponse(asOf *time.Time) GraphResponse {
 	nodes := []NodeResponse{}
 	rels := []RelationshipResponse{}
 
-	for _, node := range getAllNodes() {
-		if asOf == nil {
-			if node.IsCurrentlyValid() {
-				nodes = append(nodes, nodeToResponse(node))
-			}
-		} else {
+	if asOf == nil {
+		// For current graph, use getCurrentNodes/getCurrentRelationships
+		// to avoid returning intermediate versions
+		for _, node := range getCurrentNodes() {
+			nodes = append(nodes, nodeToResponse(node))
+		}
+		for _, rel := range getCurrentRelationships() {
+			rels = append(rels, relToResponse(rel))
+		}
+	} else {
+		// For historical view, filter all versions by time
+		for _, node := range getAllNodes() {
 			if node.IsValidAt(*asOf) {
 				nodes = append(nodes, nodeToResponse(node))
 			}
 		}
-	}
-
-	for _, rel := range getAllRelationships() {
-		if asOf == nil {
-			if rel.IsCurrentlyValid() {
-				rels = append(rels, relToResponse(rel))
-			}
-		} else {
+		for _, rel := range getAllRelationships() {
 			if rel.IsValidAt(*asOf) {
 				rels = append(rels, relToResponse(rel))
 			}
@@ -515,33 +537,57 @@ func relToResponse(rel *graph.Relationship) RelationshipResponse {
 	}
 }
 
-// Access graph internals (normally you'd add these as methods on Graph)
+// getAllNodes returns all node versions from the graph's version history
 func getAllNodes() []*graph.Node {
-	// This is a hack - in production you'd add a GetAllNodes method to Graph
+	return db.GetAllNodeVersions()
+}
+
+// getAllRelationships returns all relationship versions from the graph's version history
+func getAllRelationships() []*graph.Relationship {
+	return db.GetAllRelationshipVersions()
+}
+
+// debugVersions shows detailed version info for debugging
+func debugVersions(c *gin.Context) {
+	allVersions := db.GetAllNodeVersions()
+
+	// Group by ID
+	byID := make(map[string][]map[string]interface{})
+	for _, node := range allVersions {
+		info := map[string]interface{}{
+			"labels":     node.Labels,
+			"properties": node.Properties,
+			"validFrom":  node.ValidFrom,
+			"validTo":    node.ValidTo,
+			"isValid":    node.IsCurrentlyValid(),
+		}
+		byID[node.ID] = append(byID[node.ID], info)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"totalVersions":    len(allVersions),
+		"uniqueIDs":        len(byID),
+		"versionsByID":     byID,
+	})
+}
+
+// getCurrentNodes returns only the current (non-deleted) version of each node
+func getCurrentNodes() []*graph.Node {
 	nodes := []*graph.Node{}
-	for _, label := range []string{"Person", "Company"} {
-		nodes = append(nodes, db.GetNodesByLabel(label)...)
+	for _, node := range db.GetAllNodeVersions() {
+		if node.IsCurrentlyValid() {
+			nodes = append(nodes, node)
+		}
 	}
 	return nodes
 }
 
-func getAllRelationships() []*graph.Relationship {
-	// This is a hack - in production you'd add a GetAllRelationships method to Graph
+// getCurrentRelationships returns only the current (non-deleted) version of each relationship
+func getCurrentRelationships() []*graph.Relationship {
 	rels := []*graph.Relationship{}
-	for _, node := range getAllNodes() {
-		nodeRels := db.GetRelationshipsForNode(node.ID)
-		for _, rel := range nodeRels {
-			// Avoid duplicates
-			found := false
-			for _, existing := range rels {
-				if existing.ID == rel.ID {
-					found = true
-					break
-				}
-			}
-			if !found {
-				rels = append(rels, rel)
-			}
+	for _, rel := range db.GetAllRelationshipVersions() {
+		if rel.IsCurrentlyValid() {
+			rels = append(rels, rel)
 		}
 	}
 	return rels

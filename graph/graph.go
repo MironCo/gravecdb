@@ -292,6 +292,15 @@ func (g *Graph) replayOperation(op Operation) error {
 			node.Properties[key] = value
 		}
 
+	case "DELETE_NODE_PROPERTY":
+		// Delete a property from a node
+		nodeID := op.Data["node_id"].(string)
+		key := op.Data["key"].(string)
+
+		if node, exists := g.nodes[nodeID]; exists {
+			delete(node.Properties, key)
+		}
+
 	case "SET_REL_PROPERTY":
 		// Set a property on a relationship
 		relID := op.Data["rel_id"].(string)
@@ -300,6 +309,15 @@ func (g *Graph) replayOperation(op Operation) error {
 
 		if rel, exists := g.relationships[relID]; exists {
 			rel.Properties[key] = value
+		}
+
+	case "DELETE_REL_PROPERTY":
+		// Delete a property from a relationship
+		relID := op.Data["rel_id"].(string)
+		key := op.Data["key"].(string)
+
+		if rel, exists := g.relationships[relID]; exists {
+			delete(rel.Properties, key)
 		}
 
 	case "DELETE_NODE":
@@ -540,6 +558,19 @@ func (g *Graph) GetNodesByLabel(label string) []*Node {
 	return g.getNodesByLabelUnlocked(label)
 }
 
+// GetAllNodeVersions returns all versions of all nodes (for building timelines)
+// This includes historical versions that have been modified or deleted
+func (g *Graph) GetAllNodeVersions() []*Node {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	nodes := []*Node{}
+	for _, versions := range g.nodeVersions {
+		nodes = append(nodes, versions...)
+	}
+	return nodes
+}
+
 // getNodesByLabelUnlocked gets nodes by label without acquiring a lock (internal use)
 // Caller must already hold g.mu.RLock() or g.mu.Lock()
 func (g *Graph) getNodesByLabelUnlocked(label string) []*Node {
@@ -561,6 +592,19 @@ func (g *Graph) GetRelationshipsForNode(nodeID string) []*Relationship {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return g.getRelationshipsForNodeUnlocked(nodeID)
+}
+
+// GetAllRelationshipVersions returns all versions of all relationships (for building timelines)
+// This includes historical versions that have been modified or deleted
+func (g *Graph) GetAllRelationshipVersions() []*Relationship {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	rels := []*Relationship{}
+	for _, versions := range g.relationshipVersions {
+		rels = append(rels, versions...)
+	}
+	return rels
 }
 
 // getRelationshipsForNodeUnlocked gets relationships without acquiring a lock (internal use)
@@ -782,6 +826,93 @@ func (g *Graph) setNodePropertyUnlocked(nodeID, key string, value interface{}) e
 	return nil
 }
 
+// DeleteNodeProperty removes a property from a node
+// Creates a new version of the node without the property to preserve temporal history
+func (g *Graph) DeleteNodeProperty(nodeID, key string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.deleteNodePropertyUnlocked(nodeID, key)
+}
+
+// deleteNodePropertyUnlocked removes a property without acquiring a lock (internal use)
+// Caller must already hold g.mu.Lock()
+// Creates a new version of the node to preserve temporal history
+func (g *Graph) deleteNodePropertyUnlocked(nodeID, key string) error {
+	currentNode, exists := g.nodes[nodeID]
+	if !exists {
+		return fmt.Errorf("node with ID %s not found", nodeID)
+	}
+
+	// Check if property exists
+	if _, exists := currentNode.Properties[key]; !exists {
+		return nil // Property doesn't exist, nothing to delete
+	}
+
+	now := time.Now()
+
+	// Close out the current version
+	currentNode.ValidTo = &now
+
+	// Create a new version with copied properties (excluding the deleted one)
+	newNode := &Node{
+		ID:         currentNode.ID,
+		Labels:     currentNode.Labels, // Labels array is not modified, safe to share reference
+		Properties: make(map[string]interface{}),
+		ValidFrom:  now,
+		ValidTo:    nil, // Currently valid
+	}
+
+	// Deep copy properties except the one being deleted
+	for k, v := range currentNode.Properties {
+		if k != key {
+			newNode.Properties[k] = v
+		}
+	}
+
+	// Log the operation to the WAL
+	if g.wal != nil {
+		op := Operation{
+			Type: "DELETE_NODE_PROPERTY",
+			Data: map[string]interface{}{
+				"node_id": nodeID,
+				"key":     key,
+			},
+		}
+		if err := g.wal.WriteOperation(op); err != nil {
+			// Rollback the version change
+			currentNode.ValidTo = nil
+			return fmt.Errorf("failed to write operation to WAL: %w", err)
+		}
+	}
+
+	// Update the current node pointer
+	g.nodes[nodeID] = newNode
+
+	// Add to version history
+	g.nodeVersions[nodeID] = append(g.nodeVersions[nodeID], newNode)
+
+	// Update label index
+	for _, label := range newNode.Labels {
+		g.nodesByLabel[label][nodeID] = newNode
+	}
+
+	// Persist to bbolt if enabled
+	if g.boltStore != nil {
+		if err := g.boltStore.SaveNode(newNode); err != nil {
+			// Rollback changes
+			currentNode.ValidTo = nil
+			g.nodes[nodeID] = currentNode
+			g.nodeVersions[nodeID] = g.nodeVersions[nodeID][:len(g.nodeVersions[nodeID])-1]
+			for _, label := range newNode.Labels {
+				g.nodesByLabel[label][nodeID] = currentNode
+			}
+			return fmt.Errorf("failed to persist node property deletion to bbolt: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // SetRelationshipProperty sets a property on a relationship
 // This is a helper method that logs the operation to the WAL if persistence is enabled
 // Use this instead of calling relationship.SetProperty directly when persistence is needed
@@ -859,6 +990,87 @@ func (g *Graph) setRelationshipPropertyUnlocked(relID, key string, value interfa
 			g.relationships[relID] = currentRel
 			g.relationshipVersions[relID] = g.relationshipVersions[relID][:len(g.relationshipVersions[relID])-1]
 			return fmt.Errorf("failed to persist relationship property to bbolt: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// DeleteRelationshipProperty removes a property from a relationship
+// Creates a new version of the relationship without the property to preserve temporal history
+func (g *Graph) DeleteRelationshipProperty(relID, key string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.deleteRelationshipPropertyUnlocked(relID, key)
+}
+
+// deleteRelationshipPropertyUnlocked removes a property without acquiring a lock (internal use)
+// Caller must already hold g.mu.Lock()
+// Creates a new version of the relationship to preserve temporal history
+func (g *Graph) deleteRelationshipPropertyUnlocked(relID, key string) error {
+	currentRel, exists := g.relationships[relID]
+	if !exists {
+		return fmt.Errorf("relationship with ID %s not found", relID)
+	}
+
+	// Check if property exists
+	if _, exists := currentRel.Properties[key]; !exists {
+		return nil // Property doesn't exist, nothing to delete
+	}
+
+	now := time.Now()
+
+	// Close out the current version
+	currentRel.ValidTo = &now
+
+	// Create a new version with copied properties (excluding the deleted one)
+	newRel := &Relationship{
+		ID:         currentRel.ID,
+		Type:       currentRel.Type,
+		FromNodeID: currentRel.FromNodeID,
+		ToNodeID:   currentRel.ToNodeID,
+		Properties: make(map[string]interface{}),
+		ValidFrom:  now,
+		ValidTo:    nil, // Currently valid
+	}
+
+	// Deep copy properties except the one being deleted
+	for k, v := range currentRel.Properties {
+		if k != key {
+			newRel.Properties[k] = v
+		}
+	}
+
+	// Log the operation to the WAL
+	if g.wal != nil {
+		op := Operation{
+			Type: "DELETE_REL_PROPERTY",
+			Data: map[string]interface{}{
+				"rel_id": relID,
+				"key":    key,
+			},
+		}
+		if err := g.wal.WriteOperation(op); err != nil {
+			// Rollback the version change
+			currentRel.ValidTo = nil
+			return fmt.Errorf("failed to write operation to WAL: %w", err)
+		}
+	}
+
+	// Update the current relationship pointer
+	g.relationships[relID] = newRel
+
+	// Add to version history
+	g.relationshipVersions[relID] = append(g.relationshipVersions[relID], newRel)
+
+	// Persist to bbolt if enabled
+	if g.boltStore != nil {
+		if err := g.boltStore.SaveRelationship(newRel); err != nil {
+			// Rollback changes
+			currentRel.ValidTo = nil
+			g.relationships[relID] = currentRel
+			g.relationshipVersions[relID] = g.relationshipVersions[relID][:len(g.relationshipVersions[relID])-1]
+			return fmt.Errorf("failed to persist relationship property deletion to bbolt: %w", err)
 		}
 	}
 

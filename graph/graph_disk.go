@@ -219,32 +219,57 @@ func (g *DiskGraph) CreateNode(labels ...string) *Node {
 }
 
 // SetNodeProperty sets a property on a node
+// Creates a new version of the node to preserve temporal history
 func (g *DiskGraph) SetNodeProperty(nodeID, key string, value interface{}) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	// Read from disk
-	node, err := g.boltStore.GetNode(nodeID)
+	// Read current node from disk
+	currentNode, err := g.boltStore.GetNode(nodeID)
 	if err != nil {
 		return err
 	}
-	if node == nil {
+	if currentNode == nil {
 		return fmt.Errorf("node not found: %s", nodeID)
 	}
 
-	// Update property
-	if node.Properties == nil {
-		node.Properties = make(map[string]interface{})
-	}
-	node.Properties[key] = value
-
-	// Write back to disk
-	if err := g.boltStore.SaveNode(node); err != nil {
-		return err
+	// Check if value is actually changing
+	if currentVal, exists := currentNode.Properties[key]; exists && currentVal == value {
+		return nil // No change needed
 	}
 
-	// Update cache
-	g.nodeCache.Add(nodeID, node)
+	now := time.Now()
+
+	// Close out the current version
+	currentNode.ValidTo = &now
+
+	// Create a new version with copied properties
+	newNode := &Node{
+		ID:         currentNode.ID,
+		Labels:     currentNode.Labels, // Labels array is not modified, safe to share reference
+		Properties: make(map[string]interface{}),
+		ValidFrom:  now,
+		ValidTo:    nil, // Currently valid
+	}
+
+	// Deep copy properties
+	for k, v := range currentNode.Properties {
+		newNode.Properties[k] = v
+	}
+
+	// Apply the new value
+	newNode.Properties[key] = value
+
+	// Save both versions to disk (old version with ValidTo set, new version as current)
+	if err := g.boltStore.SaveNode(currentNode); err != nil {
+		return fmt.Errorf("failed to save old version: %w", err)
+	}
+	if err := g.boltStore.SaveNode(newNode); err != nil {
+		return fmt.Errorf("failed to save new version: %w", err)
+	}
+
+	// Update cache with new version
+	g.nodeCache.Add(nodeID, newNode)
 
 	return nil
 }
@@ -294,20 +319,53 @@ func (g *DiskGraph) SetRelationshipProperty(relID, key string, value interface{}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	rel, err := g.boltStore.GetRelationship(relID)
+	// Read current relationship from disk
+	currentRel, err := g.boltStore.GetRelationship(relID)
 	if err != nil {
 		return err
 	}
-	if rel == nil {
+	if currentRel == nil {
 		return fmt.Errorf("relationship not found: %s", relID)
 	}
 
-	if rel.Properties == nil {
-		rel.Properties = make(map[string]interface{})
+	// Check if value is actually changing
+	if currentVal, exists := currentRel.Properties[key]; exists && currentVal == value {
+		return nil // No change needed
 	}
-	rel.Properties[key] = value
 
-	return g.boltStore.SaveRelationship(rel)
+	now := time.Now()
+
+	// Close out the current version
+	currentRel.ValidTo = &now
+
+	// Create a new version with copied properties
+	newRel := &Relationship{
+		ID:         currentRel.ID,
+		Type:       currentRel.Type,
+		FromNodeID: currentRel.FromNodeID,
+		ToNodeID:   currentRel.ToNodeID,
+		Properties: make(map[string]interface{}),
+		ValidFrom:  now,
+		ValidTo:    nil, // Currently valid
+	}
+
+	// Deep copy properties
+	for k, v := range currentRel.Properties {
+		newRel.Properties[k] = v
+	}
+
+	// Apply the new value
+	newRel.Properties[key] = value
+
+	// Save both versions to disk
+	if err := g.boltStore.SaveRelationship(currentRel); err != nil {
+		return fmt.Errorf("failed to save old version: %w", err)
+	}
+	if err := g.boltStore.SaveRelationship(newRel); err != nil {
+		return fmt.Errorf("failed to save new version: %w", err)
+	}
+
+	return nil
 }
 
 // DeleteNode soft-deletes a node
@@ -380,6 +438,12 @@ func (g *DiskGraph) AsOf(t time.Time) *TemporalView {
 	for _, node := range allNodes {
 		if node.IsValidAt(t) {
 			snapshot.nodes[node.ID] = node
+			// Also add to nodeVersions so TemporalView.GetAllNodes() can find them
+			if snapshot.nodeVersions[node.ID] == nil {
+				snapshot.nodeVersions[node.ID] = []*Node{}
+			}
+			snapshot.nodeVersions[node.ID] = append(snapshot.nodeVersions[node.ID], node)
+
 			for _, label := range node.Labels {
 				if snapshot.nodesByLabel[label] == nil {
 					snapshot.nodesByLabel[label] = make(map[string]*Node)
@@ -398,6 +462,11 @@ func (g *DiskGraph) AsOf(t time.Time) *TemporalView {
 	for _, rel := range allRels {
 		if rel.IsValidAt(t) {
 			snapshot.relationships[rel.ID] = rel
+			// Also add to relationshipVersions so TemporalView.GetAllRelationships() can find them
+			if snapshot.relationshipVersions[rel.ID] == nil {
+				snapshot.relationshipVersions[rel.ID] = []*Relationship{}
+			}
+			snapshot.relationshipVersions[rel.ID] = append(snapshot.relationshipVersions[rel.ID], rel)
 		}
 	}
 
@@ -1317,6 +1386,30 @@ func (g *DiskGraph) Stats() (map[string]interface{}, error) {
 		"relationships": len(rels),
 		"bolt_stats":    boltStats,
 	}, nil
+}
+
+// GetAllNodeVersions returns all versions of all nodes (for building timelines)
+// This includes historical versions that have been modified or deleted
+func (dg *DiskGraph) GetAllNodeVersions() []*Node {
+	// BoltStore.GetAllNodes() already returns all versions
+	// (both current and historical with ValidFrom/ValidTo timestamps)
+	nodes, err := dg.boltStore.GetAllNodes()
+	if err != nil {
+		return []*Node{}
+	}
+	return nodes
+}
+
+// GetAllRelationshipVersions returns all versions of all relationships (for building timelines)
+// This includes historical versions that have been modified or deleted
+func (dg *DiskGraph) GetAllRelationshipVersions() []*Relationship {
+	// BoltStore.GetAllRelationships() already returns all versions
+	// (both current and historical with ValidFrom/ValidTo timestamps)
+	rels, err := dg.boltStore.GetAllRelationships()
+	if err != nil {
+		return []*Relationship{}
+	}
+	return rels
 }
 
 // ========== Transaction Support ==========

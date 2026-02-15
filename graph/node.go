@@ -9,11 +9,11 @@ import (
 // Node represents a vertex in the graph with labels and properties
 // Supports temporal queries through ValidFrom/ValidTo timestamps
 type Node struct {
-	ID         string
-	Labels     []string
-	Properties map[string]interface{}
-	ValidFrom  time.Time  // When this node became valid/active
-	ValidTo    *time.Time // When this node became invalid/deleted (nil = still valid)
+	ID         string                 `json:"id"`
+	Labels     []string               `json:"labels"`
+	Properties map[string]interface{} `json:"properties"`
+	ValidFrom  time.Time              `json:"validFrom"`  // When this node became valid/active
+	ValidTo    *time.Time             `json:"validTo"`    // When this node became invalid/deleted (nil = still valid)
 }
 
 // NewNode creates a new node with the given labels
@@ -59,7 +59,8 @@ func (n *Node) IsValidAt(t time.Time) bool {
 
 	// Check if the node was still valid at time t
 	// ValidTo == nil means the node is still valid (never deleted)
-	if n.ValidTo != nil && !t.Before(*n.ValidTo) {
+	// The validity range is [ValidFrom, ValidTo) - inclusive start, exclusive end
+	if n.ValidTo != nil && (t.After(*n.ValidTo) || t.Equal(*n.ValidTo)) {
 		return false
 	}
 

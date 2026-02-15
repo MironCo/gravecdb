@@ -27,11 +27,13 @@ func NewEmbedding(nodeID string, vector []float32, model string) *Embedding {
 }
 
 // IsValidAt checks if this embedding was valid at a specific point in time
+// The validity range is [ValidFrom, ValidTo) - inclusive start, exclusive end
 func (e *Embedding) IsValidAt(t time.Time) bool {
 	if t.Before(e.ValidFrom) {
 		return false
 	}
-	if e.ValidTo != nil && !t.Before(*e.ValidTo) {
+	// The validity range is [ValidFrom, ValidTo) - inclusive start, exclusive end
+	if e.ValidTo != nil && (t.After(*e.ValidTo) || t.Equal(*e.ValidTo)) {
 		return false
 	}
 	return true

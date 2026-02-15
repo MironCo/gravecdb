@@ -346,3 +346,239 @@ func TestAsOfWithNonexistentNode(t *testing.T) {
 		t.Error("Expected to find node in current state")
 	}
 }
+
+// TestTemporalQueryAtExactCreationTime tests querying at the exact moment of creation
+func TestTemporalQueryAtExactCreationTime(t *testing.T) {
+	db := NewGraph()
+
+	alice := db.CreateNode("Person")
+	db.SetNodeProperty(alice.ID, "name", "Alice")
+	creationTime := time.Now()
+
+	// Query at time after creation - should find the node
+	view := db.AsOf(creationTime)
+	node, err := view.GetNode(alice.ID)
+	if err != nil || node == nil {
+		t.Error("Expected to find node at creation time")
+	}
+}
+
+// TestTemporalRapidUpdates tests multiple rapid property updates
+func TestTemporalRapidUpdates(t *testing.T) {
+	db := NewGraph()
+
+	alice := db.CreateNode("Person")
+	db.SetNodeProperty(alice.ID, "name", "Alice")
+
+	// Capture times and perform rapid updates
+	times := make([]time.Time, 5)
+	roles := []string{"Junior", "Mid-level", "Senior", "Lead", "Principal"}
+
+	for i, role := range roles {
+		db.SetNodeProperty(alice.ID, "role", role)
+		time.Sleep(5 * time.Millisecond)
+		times[i] = time.Now()
+	}
+
+	// Verify each historical state
+	for i, expectedRole := range roles {
+		view := db.AsOf(times[i])
+		node, _ := view.GetNode(alice.ID)
+		if node == nil {
+			t.Errorf("Expected to find node at time %d", i)
+			continue
+		}
+		actualRole, _ := node.GetProperty("role")
+		if actualRole != expectedRole {
+			t.Errorf("At time %d, expected role %s, got %v", i, expectedRole, actualRole)
+		}
+	}
+}
+
+// TestTemporalPropertyRemovalAndReaddition tests removing and re-adding properties
+func TestTemporalPropertyRemovalAndReaddition(t *testing.T) {
+	db := NewGraph()
+
+	alice := db.CreateNode("Person")
+	db.SetNodeProperty(alice.ID, "name", "Alice")
+	db.SetNodeProperty(alice.ID, "email", "alice@example.com")
+
+	time1 := time.Now()
+	time.Sleep(10 * time.Millisecond)
+
+	// Remove email property
+	db.DeleteNodeProperty(alice.ID, "email")
+
+	time2 := time.Now()
+	time.Sleep(10 * time.Millisecond)
+
+	// Re-add email with different value
+	db.SetNodeProperty(alice.ID, "email", "alice@newdomain.com")
+
+	time3 := time.Now()
+
+	// Verify at time1 - should have original email
+	view1 := db.AsOf(time1)
+	node1, _ := view1.GetNode(alice.ID)
+	if node1 == nil {
+		t.Fatal("Expected to find node at time1")
+	}
+	email1, exists := node1.GetProperty("email")
+	if !exists || email1 != "alice@example.com" {
+		t.Errorf("Expected email 'alice@example.com' at time1, got %v (exists: %v)", email1, exists)
+	}
+
+	// Verify at time2 - should not have email
+	view2 := db.AsOf(time2)
+	node2, _ := view2.GetNode(alice.ID)
+	if node2 == nil {
+		t.Fatal("Expected to find node at time2")
+	}
+	email2, exists := node2.GetProperty("email")
+	if exists {
+		t.Errorf("Expected email to not exist at time2, got %v", email2)
+	}
+
+	// Verify at time3 - should have new email
+	view3 := db.AsOf(time3)
+	node3, _ := view3.GetNode(alice.ID)
+	if node3 == nil {
+		t.Fatal("Expected to find node at time3")
+	}
+	email3, exists := node3.GetProperty("email")
+	if !exists || email3 != "alice@newdomain.com" {
+		t.Errorf("Expected email 'alice@newdomain.com' at time3, got %v (exists: %v)", email3, exists)
+	}
+}
+
+// TestTemporalMultipleNodesWithSameLabel tests temporal queries with multiple nodes
+func TestTemporalMultipleNodesWithSameLabel(t *testing.T) {
+	db := NewGraph()
+
+	// Create initial state with 2 people
+	alice := db.CreateNode("Person")
+	db.SetNodeProperty(alice.ID, "name", "Alice")
+
+	bob := db.CreateNode("Person")
+	db.SetNodeProperty(bob.ID, "name", "Bob")
+
+	time1 := time.Now()
+	time.Sleep(10 * time.Millisecond)
+
+	// Add a third person
+	carol := db.CreateNode("Person")
+	db.SetNodeProperty(carol.ID, "name", "Carol")
+
+	time2 := time.Now()
+	time.Sleep(10 * time.Millisecond)
+
+	// Delete Bob
+	db.DeleteNode(bob.ID)
+
+	// Verify at time1 - should have 2 people
+	view1 := db.AsOf(time1)
+	people1 := view1.GetNodesByLabel("Person")
+	if len(people1) != 2 {
+		t.Errorf("Expected 2 people at time1, got %d", len(people1))
+	}
+
+	// Verify at time2 - should have 3 people
+	view2 := db.AsOf(time2)
+	people2 := view2.GetNodesByLabel("Person")
+	if len(people2) != 3 {
+		t.Errorf("Expected 3 people at time2, got %d", len(people2))
+	}
+
+	// Verify current - should have 2 people (Bob deleted)
+	currentPeople := db.GetNodesByLabel("Person")
+	if len(currentPeople) != 2 {
+		t.Errorf("Expected 2 people in current state, got %d", len(currentPeople))
+	}
+}
+
+// TestTemporalRelationshipPropertyCascade tests relationship properties changing multiple times
+func TestTemporalRelationshipPropertyCascade(t *testing.T) {
+	db := NewGraph()
+
+	alice := db.CreateNode("Person")
+	bob := db.CreateNode("Person")
+	friendship, _ := db.CreateRelationship("FRIENDS_WITH", alice.ID, bob.ID)
+
+	// Track property changes
+	db.SetRelationshipProperty(friendship.ID, "closeness", 5)
+	time1 := time.Now()
+	time.Sleep(10 * time.Millisecond)
+
+	db.SetRelationshipProperty(friendship.ID, "closeness", 7)
+	time2 := time.Now()
+	time.Sleep(10 * time.Millisecond)
+
+	db.SetRelationshipProperty(friendship.ID, "closeness", 10)
+	time3 := time.Now()
+
+	// Verify each state
+	view1 := db.AsOf(time1)
+	rel1, _ := view1.GetRelationship(friendship.ID)
+	if rel1 == nil {
+		t.Fatal("Expected to find relationship at time1")
+	}
+	closeness1, _ := rel1.GetProperty("closeness")
+	if closeness1 != 5 {
+		t.Errorf("Expected closeness 5 at time1, got %v", closeness1)
+	}
+
+	view2 := db.AsOf(time2)
+	rel2, _ := view2.GetRelationship(friendship.ID)
+	if rel2 == nil {
+		t.Fatal("Expected to find relationship at time2")
+	}
+	closeness2, _ := rel2.GetProperty("closeness")
+	if closeness2 != 7 {
+		t.Errorf("Expected closeness 7 at time2, got %v", closeness2)
+	}
+
+	view3 := db.AsOf(time3)
+	rel3, _ := view3.GetRelationship(friendship.ID)
+	if rel3 == nil {
+		t.Fatal("Expected to find relationship at time3")
+	}
+	closeness3, _ := rel3.GetProperty("closeness")
+	if closeness3 != 10 {
+		t.Errorf("Expected closeness 10 at time3, got %v", closeness3)
+	}
+}
+
+// TestTemporalEmptyGraph tests temporal queries on an empty graph
+func TestTemporalEmptyGraph(t *testing.T) {
+	db := NewGraph()
+
+	pastTime := time.Now()
+
+	// Query empty graph
+	view := db.AsOf(pastTime)
+	nodes := view.GetAllNodes()
+	if len(nodes) != 0 {
+		t.Errorf("Expected 0 nodes in empty graph, got %d", len(nodes))
+	}
+
+	rels := view.GetAllRelationships()
+	if len(rels) != 0 {
+		t.Errorf("Expected 0 relationships in empty graph, got %d", len(rels))
+	}
+}
+
+// TestTemporalFutureQuery tests querying the graph at a future time
+func TestTemporalFutureQuery(t *testing.T) {
+	db := NewGraph()
+
+	alice := db.CreateNode("Person")
+	db.SetNodeProperty(alice.ID, "name", "Alice")
+
+	// Query at a future time (should see current state)
+	futureTime := time.Now().Add(24 * time.Hour)
+	view := db.AsOf(futureTime)
+	node, _ := view.GetNode(alice.ID)
+	if node == nil {
+		t.Error("Expected to find node when querying future time")
+	}
+}

@@ -30,6 +30,8 @@ type GraphDB interface {
 
 	// Temporal operations
 	AsOf(t time.Time) *TemporalView
+	GetAllNodeVersions() []*Node
+	GetAllRelationshipVersions() []*Relationship
 
 	// Database management
 	Close() error

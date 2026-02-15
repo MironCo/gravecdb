@@ -333,11 +333,15 @@ func convertCreateToGraph(c *CreateClause) (*GraphCreateClause, error) {
 				if err != nil {
 					return nil, err
 				}
-				gc.Nodes = append(gc.Nodes, GraphCreateNode{
-					Variable:   e.Variable,
-					Labels:     e.Labels,
-					Properties: props,
-				})
+				// Only create a new node if it has labels or properties
+				// Otherwise it's just a reference to an existing node (from MATCH)
+				if len(e.Labels) > 0 || len(props) > 0 {
+					gc.Nodes = append(gc.Nodes, GraphCreateNode{
+						Variable:   e.Variable,
+						Labels:     e.Labels,
+						Properties: props,
+					})
+				}
 				lastNodeVar = e.Variable
 
 			case *RelationshipPattern:

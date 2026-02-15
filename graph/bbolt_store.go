@@ -66,6 +66,7 @@ func NewBoltStore(dataDir string) (*BoltStore, error) {
 }
 
 // SaveNode persists a node to bbolt
+// Uses composite key nodeID:validFromNano to support multiple versions per node
 func (s *BoltStore) SaveNode(node *Node) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(nodesBucket)
@@ -76,8 +77,10 @@ func (s *BoltStore) SaveNode(node *Node) error {
 			return fmt.Errorf("failed to marshal node: %w", err)
 		}
 
-		// Store node by ID
-		if err := b.Put([]byte(node.ID), data); err != nil {
+		// Store node by composite key: ID:ValidFrom.UnixNano()
+		// This allows multiple versions of the same node to coexist
+		key := fmt.Sprintf("%s:%d", node.ID, node.ValidFrom.UnixNano())
+		if err := b.Put([]byte(key), data); err != nil {
 			return fmt.Errorf("failed to save node: %w", err)
 		}
 
@@ -94,24 +97,31 @@ func (s *BoltStore) SaveNode(node *Node) error {
 	})
 }
 
-// GetNode retrieves a node by ID
+// GetNode retrieves the current (latest valid) version of a node by ID
+// Scans all versions with the given ID prefix and returns the one that is currently valid
 func (s *BoltStore) GetNode(id string) (*Node, error) {
 	var node *Node
 
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(nodesBucket)
-		data := b.Get([]byte(id))
+		c := b.Cursor()
 
-		if data == nil {
-			return nil // Node not found
+		// Seek to the first key with this node ID prefix
+		prefix := []byte(id + ":")
+		for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
+			var n Node
+			if err := json.Unmarshal(v, &n); err != nil {
+				return fmt.Errorf("failed to unmarshal node: %w", err)
+			}
+
+			// Find the version that is currently valid (ValidTo == nil)
+			if n.ValidTo == nil {
+				node = &n
+				return nil
+			}
 		}
 
-		node = &Node{}
-		if err := json.Unmarshal(data, node); err != nil {
-			return fmt.Errorf("failed to unmarshal node: %w", err)
-		}
-
-		return nil
+		return nil // Node not found or all versions are expired
 	})
 
 	return node, err
@@ -175,32 +185,47 @@ func (s *BoltStore) GetNodesByLabel(label string) ([]*Node, error) {
 func (s *BoltStore) DeleteNode(id string, deletedAt time.Time) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(nodesBucket)
+		c := b.Cursor()
 
-		// Get existing node
-		data := b.Get([]byte(id))
-		if data == nil {
-			return fmt.Errorf("node not found: %s", id)
+		// Find the current valid version of this node
+		prefix := []byte(id + ":")
+		var foundKey []byte
+		var node Node
+
+		for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
+			var n Node
+			if err := json.Unmarshal(v, &n); err != nil {
+				return fmt.Errorf("failed to unmarshal node: %w", err)
+			}
+
+			// Find the version that is currently valid (ValidTo == nil)
+			if n.ValidTo == nil {
+				foundKey = k
+				node = n
+				break
+			}
 		}
 
-		var node Node
-		if err := json.Unmarshal(data, &node); err != nil {
-			return fmt.Errorf("failed to unmarshal node: %w", err)
+		if foundKey == nil {
+			return fmt.Errorf("node not found: %s", id)
 		}
 
 		// Set ValidTo (soft delete)
 		node.ValidTo = &deletedAt
 
-		// Save updated node
+		// Save updated node with the same key
 		updatedData, err := json.Marshal(node)
 		if err != nil {
 			return fmt.Errorf("failed to marshal node: %w", err)
 		}
 
-		return b.Put([]byte(id), updatedData)
+		return b.Put(foundKey, updatedData)
 	})
 }
 
 // SaveRelationship persists a relationship to bbolt
+// SaveRelationship persists a relationship to bbolt
+// Uses composite key relID:validFromNano to support multiple versions
 func (s *BoltStore) SaveRelationship(rel *Relationship) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(relationshipsBucket)
@@ -210,25 +235,33 @@ func (s *BoltStore) SaveRelationship(rel *Relationship) error {
 			return fmt.Errorf("failed to marshal relationship: %w", err)
 		}
 
-		return b.Put([]byte(rel.ID), data)
+		// Store relationship by composite key: ID:ValidFrom.UnixNano()
+		key := fmt.Sprintf("%s:%d", rel.ID, rel.ValidFrom.UnixNano())
+		return b.Put([]byte(key), data)
 	})
 }
 
-// GetRelationship retrieves a relationship by ID
+// GetRelationship retrieves the current (latest valid) version of a relationship by ID
 func (s *BoltStore) GetRelationship(id string) (*Relationship, error) {
 	var rel *Relationship
 
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(relationshipsBucket)
-		data := b.Get([]byte(id))
+		c := b.Cursor()
 
-		if data == nil {
-			return nil
-		}
+		// Seek to the first key with this relationship ID prefix
+		prefix := []byte(id + ":")
+		for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
+			var r Relationship
+			if err := json.Unmarshal(v, &r); err != nil {
+				return fmt.Errorf("failed to unmarshal relationship: %w", err)
+			}
 
-		rel = &Relationship{}
-		if err := json.Unmarshal(data, rel); err != nil {
-			return fmt.Errorf("failed to unmarshal relationship: %w", err)
+			// Find the version that is currently valid (ValidTo == nil)
+			if r.ValidTo == nil {
+				rel = &r
+				return nil
+			}
 		}
 
 		return nil
@@ -263,15 +296,29 @@ func (s *BoltStore) GetAllRelationships() ([]*Relationship, error) {
 func (s *BoltStore) DeleteRelationship(id string, deletedAt time.Time) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(relationshipsBucket)
+		c := b.Cursor()
 
-		data := b.Get([]byte(id))
-		if data == nil {
-			return fmt.Errorf("relationship not found: %s", id)
+		// Find the current valid version of this relationship
+		prefix := []byte(id + ":")
+		var foundKey []byte
+		var rel Relationship
+
+		for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
+			var r Relationship
+			if err := json.Unmarshal(v, &r); err != nil {
+				return fmt.Errorf("failed to unmarshal relationship: %w", err)
+			}
+
+			// Find the version that is currently valid (ValidTo == nil)
+			if r.ValidTo == nil {
+				foundKey = k
+				rel = r
+				break
+			}
 		}
 
-		var rel Relationship
-		if err := json.Unmarshal(data, &rel); err != nil {
-			return fmt.Errorf("failed to unmarshal relationship: %w", err)
+		if foundKey == nil {
+			return fmt.Errorf("relationship not found: %s", id)
 		}
 
 		rel.ValidTo = &deletedAt
@@ -281,7 +328,7 @@ func (s *BoltStore) DeleteRelationship(id string, deletedAt time.Time) error {
 			return fmt.Errorf("failed to marshal relationship: %w", err)
 		}
 
-		return b.Put([]byte(id), updatedData)
+		return b.Put(foundKey, updatedData)
 	})
 }
 
@@ -392,6 +439,7 @@ func (tx *Tx) Rollback() error {
 }
 
 // SaveNode persists a node within a transaction
+// Uses composite key nodeID:validFromNano to support multiple versions
 func (tx *Tx) SaveNode(node *Node) error {
 	if !tx.writable {
 		return fmt.Errorf("cannot write in read-only transaction")
@@ -407,7 +455,9 @@ func (tx *Tx) SaveNode(node *Node) error {
 		return fmt.Errorf("failed to marshal node: %w", err)
 	}
 
-	if err := b.Put([]byte(node.ID), data); err != nil {
+	// Store node by composite key: ID:ValidFrom.UnixNano()
+	key := fmt.Sprintf("%s:%d", node.ID, node.ValidFrom.UnixNano())
+	if err := b.Put([]byte(key), data); err != nil {
 		return fmt.Errorf("failed to save node: %w", err)
 	}
 
@@ -425,24 +475,29 @@ func (tx *Tx) SaveNode(node *Node) error {
 	return nil
 }
 
-// GetNode retrieves a node within a transaction
+// GetNode retrieves the current (latest valid) version of a node within a transaction
 func (tx *Tx) GetNode(id string) (*Node, error) {
 	b := tx.btx.Bucket(nodesBucket)
 	if b == nil {
 		return nil, fmt.Errorf("nodes bucket not found")
 	}
 
-	data := b.Get([]byte(id))
-	if data == nil {
-		return nil, nil
+	c := b.Cursor()
+	prefix := []byte(id + ":")
+
+	for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
+		var n Node
+		if err := json.Unmarshal(v, &n); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal node: %w", err)
+		}
+
+		// Find the version that is currently valid (ValidTo == nil)
+		if n.ValidTo == nil {
+			return &n, nil
+		}
 	}
 
-	node := &Node{}
-	if err := json.Unmarshal(data, node); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal node: %w", err)
-	}
-
-	return node, nil
+	return nil, nil
 }
 
 // DeleteNode marks a node as deleted within a transaction
@@ -456,14 +511,26 @@ func (tx *Tx) DeleteNode(id string, deletedAt time.Time) error {
 		return fmt.Errorf("nodes bucket not found")
 	}
 
-	data := b.Get([]byte(id))
-	if data == nil {
-		return fmt.Errorf("node not found: %s", id)
+	c := b.Cursor()
+	prefix := []byte(id + ":")
+	var foundKey []byte
+	var node Node
+
+	for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
+		var n Node
+		if err := json.Unmarshal(v, &n); err != nil {
+			return fmt.Errorf("failed to unmarshal node: %w", err)
+		}
+
+		if n.ValidTo == nil {
+			foundKey = k
+			node = n
+			break
+		}
 	}
 
-	var node Node
-	if err := json.Unmarshal(data, &node); err != nil {
-		return fmt.Errorf("failed to unmarshal node: %w", err)
+	if foundKey == nil {
+		return fmt.Errorf("node not found: %s", id)
 	}
 
 	node.ValidTo = &deletedAt
@@ -473,10 +540,11 @@ func (tx *Tx) DeleteNode(id string, deletedAt time.Time) error {
 		return fmt.Errorf("failed to marshal node: %w", err)
 	}
 
-	return b.Put([]byte(id), updatedData)
+	return b.Put(foundKey, updatedData)
 }
 
 // SaveRelationship persists a relationship within a transaction
+// Uses composite key relID:validFromNano to support multiple versions
 func (tx *Tx) SaveRelationship(rel *Relationship) error {
 	if !tx.writable {
 		return fmt.Errorf("cannot write in read-only transaction")
@@ -492,27 +560,32 @@ func (tx *Tx) SaveRelationship(rel *Relationship) error {
 		return fmt.Errorf("failed to marshal relationship: %w", err)
 	}
 
-	return b.Put([]byte(rel.ID), data)
+	key := fmt.Sprintf("%s:%d", rel.ID, rel.ValidFrom.UnixNano())
+	return b.Put([]byte(key), data)
 }
 
-// GetRelationship retrieves a relationship within a transaction
+// GetRelationship retrieves the current (latest valid) version of a relationship within a transaction
 func (tx *Tx) GetRelationship(id string) (*Relationship, error) {
 	b := tx.btx.Bucket(relationshipsBucket)
 	if b == nil {
 		return nil, fmt.Errorf("relationships bucket not found")
 	}
 
-	data := b.Get([]byte(id))
-	if data == nil {
-		return nil, nil
+	c := b.Cursor()
+	prefix := []byte(id + ":")
+
+	for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
+		var r Relationship
+		if err := json.Unmarshal(v, &r); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal relationship: %w", err)
+		}
+
+		if r.ValidTo == nil {
+			return &r, nil
+		}
 	}
 
-	rel := &Relationship{}
-	if err := json.Unmarshal(data, rel); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal relationship: %w", err)
-	}
-
-	return rel, nil
+	return nil, nil
 }
 
 // DeleteRelationship marks a relationship as deleted within a transaction
@@ -526,14 +599,26 @@ func (tx *Tx) DeleteRelationship(id string, deletedAt time.Time) error {
 		return fmt.Errorf("relationships bucket not found")
 	}
 
-	data := b.Get([]byte(id))
-	if data == nil {
-		return fmt.Errorf("relationship not found: %s", id)
+	c := b.Cursor()
+	prefix := []byte(id + ":")
+	var foundKey []byte
+	var rel Relationship
+
+	for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
+		var r Relationship
+		if err := json.Unmarshal(v, &r); err != nil {
+			return fmt.Errorf("failed to unmarshal relationship: %w", err)
+		}
+
+		if r.ValidTo == nil {
+			foundKey = k
+			rel = r
+			break
+		}
 	}
 
-	var rel Relationship
-	if err := json.Unmarshal(data, &rel); err != nil {
-		return fmt.Errorf("failed to unmarshal relationship: %w", err)
+	if foundKey == nil {
+		return fmt.Errorf("relationship not found: %s", id)
 	}
 
 	rel.ValidTo = &deletedAt

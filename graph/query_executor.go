@@ -138,10 +138,32 @@ func (g *Graph) findMatches(pattern *MatchPattern, timeClause *TimeClause) []Mat
 		return nil
 	}
 
-	matches := []Match{}
-
 	// Determine the query time based on TimeClause
 	queryTime := g.getQueryTime(timeClause)
+
+	// Find which node patterns are connected via relationships
+	// Build a map of which nodes are involved in relationships
+	connectedNodes := make(map[int]bool)
+	for _, rel := range pattern.Relationships {
+		connectedNodes[rel.FromIndex] = true
+		connectedNodes[rel.ToIndex] = true
+	}
+
+	// Find disconnected node patterns (those not in any relationship)
+	var disconnectedPatterns []int
+	for i := range pattern.Nodes {
+		if !connectedNodes[i] {
+			disconnectedPatterns = append(disconnectedPatterns, i)
+		}
+	}
+
+	// If all nodes are disconnected (no relationships), do Cartesian product
+	if len(pattern.Relationships) == 0 {
+		return g.findDisconnectedMatches(pattern.Nodes, queryTime)
+	}
+
+	// Otherwise, start with connected pattern matching
+	matches := []Match{}
 
 	// Start with the first node pattern
 	firstNodePattern := pattern.Nodes[0]
@@ -170,6 +192,106 @@ func (g *Graph) findMatches(pattern *MatchPattern, timeClause *TimeClause) []Mat
 		g.extendMatch(match, pattern, 0, queryTime, &matches)
 	}
 
+	// If there are disconnected patterns, extend matches with them
+	if len(disconnectedPatterns) > 0 {
+		matches = g.extendWithDisconnectedNodes(matches, pattern.Nodes, disconnectedPatterns, queryTime)
+	}
+
+	return matches
+}
+
+// findDisconnectedMatches handles MATCH (a:Label), (b:Label) with no relationships
+// Returns Cartesian product of all matching nodes
+func (g *Graph) findDisconnectedMatches(nodePatterns []NodePattern, queryTime *time.Time) []Match {
+	if len(nodePatterns) == 0 {
+		return nil
+	}
+
+	// Start with matches for the first pattern
+	matches := []Match{}
+	firstPattern := nodePatterns[0]
+	for _, node := range g.getCandidateNodes(firstPattern) {
+		if queryTime != nil {
+			if !node.IsValidAt(*queryTime) {
+				continue
+			}
+		} else {
+			if !node.IsCurrentlyValid() {
+				continue
+			}
+		}
+		match := Match{}
+		if firstPattern.Variable != "" {
+			match[firstPattern.Variable] = node
+		}
+		matches = append(matches, match)
+	}
+
+	// For each additional pattern, do Cartesian product
+	for i := 1; i < len(nodePatterns); i++ {
+		pattern := nodePatterns[i]
+		candidates := g.getCandidateNodes(pattern)
+
+		var newMatches []Match
+		for _, existingMatch := range matches {
+			for _, node := range candidates {
+				if queryTime != nil {
+					if !node.IsValidAt(*queryTime) {
+						continue
+					}
+				} else {
+					if !node.IsCurrentlyValid() {
+						continue
+					}
+				}
+				// Copy existing match and add new node
+				newMatch := Match{}
+				for k, v := range existingMatch {
+					newMatch[k] = v
+				}
+				if pattern.Variable != "" {
+					newMatch[pattern.Variable] = node
+				}
+				newMatches = append(newMatches, newMatch)
+			}
+		}
+		matches = newMatches
+	}
+
+	return matches
+}
+
+// extendWithDisconnectedNodes extends existing matches with disconnected node patterns
+func (g *Graph) extendWithDisconnectedNodes(matches []Match, nodePatterns []NodePattern, disconnectedIndices []int, queryTime *time.Time) []Match {
+	for _, idx := range disconnectedIndices {
+		pattern := nodePatterns[idx]
+		candidates := g.getCandidateNodes(pattern)
+
+		var newMatches []Match
+		for _, existingMatch := range matches {
+			for _, node := range candidates {
+				if queryTime != nil {
+					if !node.IsValidAt(*queryTime) {
+						continue
+					}
+				} else {
+					if !node.IsCurrentlyValid() {
+						continue
+					}
+				}
+				// Copy existing match and add new node
+				newMatch := Match{}
+				for k, v := range existingMatch {
+					newMatch[k] = v
+				}
+				if pattern.Variable != "" {
+					newMatch[pattern.Variable] = node
+				}
+				newMatches = append(newMatches, newMatch)
+			}
+		}
+		matches = newMatches
+	}
 	return matches
 }
 
