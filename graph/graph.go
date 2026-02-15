@@ -5,8 +5,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MironCo/gravecdb/core"
 	"github.com/MironCo/gravecdb/embedding"
 )
+
+// Type aliases for core types
+type Node = core.Node
+type Relationship = core.Relationship
+
+var NewNode = core.NewNode
+var NewRelationship = core.NewRelationship
 
 // Type aliases for embedding types
 type Embedding = embedding.Embedding

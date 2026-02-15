@@ -1,4 +1,4 @@
-package graph
+package core
 
 import (
 	"time"
@@ -12,19 +12,18 @@ type Node struct {
 	ID         string                 `json:"id"`
 	Labels     []string               `json:"labels"`
 	Properties map[string]interface{} `json:"properties"`
-	ValidFrom  time.Time              `json:"validFrom"`  // When this node became valid/active
-	ValidTo    *time.Time             `json:"validTo"`    // When this node became invalid/deleted (nil = still valid)
+	ValidFrom  time.Time              `json:"validFrom"`
+	ValidTo    *time.Time             `json:"validTo"`
 }
 
 // NewNode creates a new node with the given labels
-// The node is marked as valid starting from the current time
 func NewNode(labels ...string) *Node {
 	return &Node{
 		ID:         uuid.New().String(),
 		Labels:     labels,
 		Properties: make(map[string]interface{}),
 		ValidFrom:  time.Now(),
-		ValidTo:    nil, // nil indicates the node is currently valid
+		ValidTo:    nil,
 	}
 }
 
@@ -50,20 +49,13 @@ func (n *Node) HasLabel(label string) bool {
 }
 
 // IsValidAt checks if the node was valid at a specific point in time
-// A node is valid at time t if: ValidFrom <= t AND (ValidTo is nil OR ValidTo > t)
 func (n *Node) IsValidAt(t time.Time) bool {
-	// Check if the node had been created by time t
 	if t.Before(n.ValidFrom) {
 		return false
 	}
-
-	// Check if the node was still valid at time t
-	// ValidTo == nil means the node is still valid (never deleted)
-	// The validity range is [ValidFrom, ValidTo) - inclusive start, exclusive end
 	if n.ValidTo != nil && (t.After(*n.ValidTo) || t.Equal(*n.ValidTo)) {
 		return false
 	}
-
 	return true
 }
 
