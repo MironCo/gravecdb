@@ -31,6 +31,9 @@ type DeleteClause = cypher.GraphDeleteClause
 type EmbedClause = cypher.GraphEmbedClause
 type SimilarToClause = cypher.GraphSimilarToClause
 type MergeClause = cypher.GraphMergeClause
+type RemoveClause = cypher.GraphRemoveClause
+type RemoveItem = cypher.GraphRemoveItem
+type UnwindClause = cypher.GraphUnwindClause
 
 // ParseQuery parses a Cypher query string and returns a Query
 func ParseQuery(queryStr string) (*Query, error) {

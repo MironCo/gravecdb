@@ -15,6 +15,8 @@ func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*
 		return g.executeCreateQuery(query)
 	case "MERGE":
 		return g.executeMergeQuery(query)
+	case "UNWIND":
+		return g.executeUnwindQuery(query)
 	case "MATCH":
 		// Check if this is a mutating MATCH query
 		if query.CreateClause != nil {
@@ -25,6 +27,12 @@ func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*
 		}
 		if query.DeleteClause != nil {
 			return g.executeDeleteQuery(query)
+		}
+		if query.RemoveClause != nil {
+			return g.executeRemoveQuery(query)
+		}
+		if query.UnwindClause != nil {
+			return g.executeUnwindQuery(query)
 		}
 		// Handle EMBED queries specially - need to persist embeddings
 		if query.EmbedClause != nil {
@@ -745,6 +753,110 @@ func (g *DiskGraph) executeMergeQuery(query *Query) (*QueryResult, error) {
 			"merged":  mergedCount,
 			"created": createdCount,
 		})
+	}
+
+	return result, nil
+}
+
+// executeRemoveQuery handles MATCH...REMOVE queries (remove properties from nodes/relationships)
+func (g *DiskGraph) executeRemoveQuery(query *Query) (*QueryResult, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// Find matches
+	matches := g.findMatchesUnlocked(query.MatchPattern, query.WhereClause)
+
+	removedCount := 0
+	for _, match := range matches {
+		for _, item := range query.RemoveClause.Items {
+			entity, ok := match[item.Variable]
+			if !ok {
+				continue
+			}
+
+			if item.Property != "" {
+				// Remove property
+				if node, ok := entity.(*Node); ok {
+					if err := g.deleteNodePropertyUnlocked(node.ID, item.Property); err == nil {
+						removedCount++
+					}
+				} else if rel, ok := entity.(*Relationship); ok {
+					if err := g.deleteRelPropertyUnlocked(rel.ID, item.Property); err == nil {
+						removedCount++
+					}
+				}
+			}
+			// Note: Label removal (item.Label) not implemented yet
+		}
+	}
+
+	return &QueryResult{
+		Columns: []string{"removed"},
+		Rows:    []map[string]interface{}{{"removed": removedCount}},
+	}, nil
+}
+
+// executeUnwindQuery handles UNWIND...RETURN queries (expand lists into rows)
+func (g *DiskGraph) executeUnwindQuery(query *Query) (*QueryResult, error) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	uc := query.UnwindClause
+	if uc == nil {
+		return nil, fmt.Errorf("UNWIND clause required")
+	}
+
+	// Get the list to unwind
+	list, ok := uc.Expression.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("UNWIND requires a list expression")
+	}
+
+	result := &QueryResult{
+		Columns: []string{},
+		Rows:    []map[string]interface{}{},
+	}
+
+	// Build column names from RETURN clause
+	if query.ReturnClause != nil {
+		for _, item := range query.ReturnClause.Items {
+			if item.Property != "" {
+				result.Columns = append(result.Columns, item.Variable+"."+item.Property)
+			} else {
+				result.Columns = append(result.Columns, item.Variable)
+			}
+		}
+	} else {
+		result.Columns = []string{uc.Variable}
+	}
+
+	// Unwind the list into rows
+	for _, elem := range list {
+		row := map[string]interface{}{}
+
+		if query.ReturnClause != nil {
+			for _, item := range query.ReturnClause.Items {
+				colName := item.Variable
+				if item.Property != "" {
+					colName = item.Variable + "." + item.Property
+				}
+
+				if item.Variable == uc.Variable {
+					if item.Property != "" {
+						// Try to access property on the element
+						if m, ok := elem.(map[string]interface{}); ok {
+							row[colName] = m[item.Property]
+						}
+					} else {
+						row[colName] = elem
+					}
+				}
+			}
+		} else {
+			row[uc.Variable] = elem
+		}
+
+		result.Rows = append(result.Rows, row)
 	}
 
 	return result, nil

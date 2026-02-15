@@ -313,3 +313,45 @@ func (g *DiskGraph) DeleteNodeProperty(nodeID, key string) error {
 	g.nodeCache.Add(nodeID, newNode)
 	return nil
 }
+
+// deleteNodePropertyUnlocked removes a property from a node (caller must hold write lock)
+func (g *DiskGraph) deleteNodePropertyUnlocked(nodeID, key string) error {
+	currentNode, err := g.boltStore.GetNode(nodeID)
+	if err != nil {
+		return err
+	}
+	if currentNode == nil {
+		return fmt.Errorf("node not found: %s", nodeID)
+	}
+
+	if _, exists := currentNode.Properties[key]; !exists {
+		return nil
+	}
+
+	now := time.Now()
+	currentNode.ValidTo = &now
+
+	newNode := &Node{
+		ID:         currentNode.ID,
+		Labels:     currentNode.Labels,
+		Properties: make(map[string]interface{}),
+		ValidFrom:  now,
+		ValidTo:    nil,
+	}
+
+	for k, v := range currentNode.Properties {
+		if k != key {
+			newNode.Properties[k] = v
+		}
+	}
+
+	if err := g.boltStore.SaveNode(currentNode); err != nil {
+		return err
+	}
+	if err := g.boltStore.SaveNode(newNode); err != nil {
+		return err
+	}
+
+	g.nodeCache.Add(nodeID, newNode)
+	return nil
+}

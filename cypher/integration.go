@@ -25,6 +25,8 @@ type GraphQuery struct {
 	MergeClause     *GraphMergeClause
 	SetClause       *GraphSetClause
 	DeleteClause    *GraphDeleteClause
+	RemoveClause    *GraphRemoveClause
+	UnwindClause    *GraphUnwindClause
 	WhereClause     *GraphWhereClause
 	ReturnClause    *GraphReturnClause
 	TimeClause      *GraphTimeClause
@@ -94,6 +96,21 @@ type GraphPropertyUpdate struct {
 type GraphDeleteClause struct {
 	Variables []string
 	Detach    bool
+}
+
+type GraphRemoveClause struct {
+	Items []GraphRemoveItem
+}
+
+type GraphRemoveItem struct {
+	Variable string
+	Property string // For property removal (n.prop)
+	Label    string // For label removal (n:Label)
+}
+
+type GraphUnwindClause struct {
+	Expression interface{} // The list expression to unwind
+	Variable   string      // AS variable
 }
 
 type GraphWhereClause struct {
@@ -209,6 +226,17 @@ func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
 		case *DeleteClause:
 			dc := convertDeleteToGraph(c)
 			gq.DeleteClause = dc
+
+		case *RemoveClause:
+			rc := convertRemoveToGraph(c)
+			gq.RemoveClause = rc
+
+		case *UnwindClause:
+			uc := convertUnwindToGraph(c)
+			if gq.QueryType == "" {
+				gq.QueryType = "UNWIND"
+			}
+			gq.UnwindClause = uc
 
 		case *TimeClause:
 			tc := convertTimeToGraph(c)
@@ -610,6 +638,39 @@ func convertDeleteToGraph(d *DeleteClause) *GraphDeleteClause {
 	}
 
 	return gd
+}
+
+func convertRemoveToGraph(r *RemoveClause) *GraphRemoveClause {
+	gr := &GraphRemoveClause{
+		Items: []GraphRemoveItem{},
+	}
+
+	for _, item := range r.Items {
+		ri := GraphRemoveItem{}
+
+		switch e := item.(type) {
+		case *PropertyAccess:
+			// REMOVE n.property
+			if ident, ok := e.Object.(*Identifier); ok {
+				ri.Variable = ident.Name
+			}
+			ri.Property = e.Property
+		case *Identifier:
+			// Could be label removal syntax - but typically it's n:Label
+			ri.Variable = e.Name
+		}
+
+		gr.Items = append(gr.Items, ri)
+	}
+
+	return gr
+}
+
+func convertUnwindToGraph(u *UnwindClause) *GraphUnwindClause {
+	return &GraphUnwindClause{
+		Expression: extractExprValue(u.Expression),
+		Variable:   u.Variable,
+	}
 }
 
 func convertTimeToGraph(t *TimeClause) *GraphTimeClause {

@@ -238,6 +238,65 @@ def test_merge_operations(session):
              expect_results=False)
 
 
+def test_remove_operations(session):
+    """Test REMOVE operations."""
+    print("\n" + "=" * 60)
+    print("REMOVE OPERATIONS")
+    print("=" * 60)
+
+    # Create a node with properties to remove
+    run_test(session, "Create node with properties",
+             "CREATE (p:Person {name: 'RemoveTest', age: 30, temp: 'toremove'})",
+             expect_results=False)
+
+    # Verify properties exist
+    records = run_test(session, "Verify properties exist",
+                       "MATCH (p:Person {name: 'RemoveTest'}) RETURN p.name, p.age, p.temp")
+    if records and len(records) == 1:
+        print("  ✓ Node created with properties")
+
+    # Remove a property
+    run_test(session, "REMOVE property",
+             "MATCH (p:Person {name: 'RemoveTest'}) REMOVE p.temp",
+             expect_results=False)
+
+    # Verify property was removed
+    records = run_test(session, "Verify property removed",
+                       "MATCH (p:Person {name: 'RemoveTest'}) RETURN p.name, p.age, p.temp")
+    if records and len(records) == 1:
+        rec = dict(records[0])
+        if rec.get('p.temp') is None:
+            print("  ✓ Property successfully removed")
+        else:
+            print(f"  ✗ Property still exists: {rec.get('p.temp')}")
+
+    # Cleanup
+    run_test(session, "Delete RemoveTest node",
+             "MATCH (p:Person {name: 'RemoveTest'}) DELETE p",
+             expect_results=False)
+
+
+def test_unwind_operations(session):
+    """Test UNWIND operations."""
+    print("\n" + "=" * 60)
+    print("UNWIND OPERATIONS")
+    print("=" * 60)
+
+    # UNWIND a list
+    records = run_test(session, "UNWIND list",
+                       "UNWIND [1, 2, 3] AS x RETURN x")
+    if records and len(records) == 3:
+        print("  ✓ UNWIND expanded list into 3 rows")
+    else:
+        print(f"  ✗ Expected 3 rows, got {len(records) if records else 0}")
+
+    # UNWIND with strings
+    records = run_test(session, "UNWIND string list",
+                       "UNWIND ['a', 'b', 'c'] AS letter RETURN letter")
+    if records and len(records) == 3:
+        print("  ✓ UNWIND works with strings")
+
+
 def cleanup(session):
     """Clean up test data."""
     print("\n" + "=" * 60)
@@ -293,6 +352,8 @@ def main():
         test_delete_operations(session)
         test_complex_patterns(session)
         test_merge_operations(session)
+        test_remove_operations(session)
+        test_unwind_operations(session)
 
         # Cleanup
         cleanup(session)

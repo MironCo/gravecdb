@@ -44,8 +44,8 @@ GravecDB implements the Neo4j Bolt protocol (v4.4), allowing connections from st
 | OPTIONAL MATCH | ⚠️ | Parsed, may not behave correctly |
 | MERGE | ✅ | Match or create pattern |
 | WITH | ⚠️ | Basic support |
-| UNWIND | ❌ | Parsed but not implemented |
-| REMOVE | ❌ | Parsed but not implemented |
+| UNWIND | ✅ | Expand lists into rows |
+| REMOVE | ✅ | Remove properties from nodes/relationships |
 | FOREACH | ❌ | Not implemented |
 | CALL/YIELD | ❌ | Procedures not supported |
 | UNION | ❌ | Not implemented |
@@ -113,8 +113,8 @@ GravecDB implements the Neo4j Bolt protocol (v4.4), allowing connections from st
 - [ ] Implement Path data type for Bolt responses
 
 ### Medium Priority
-- [ ] Implement REMOVE clause
-- [ ] Implement UNWIND clause
+- [x] ~~Implement REMOVE clause~~
+- [x] ~~Implement UNWIND clause~~
 - [ ] Add UNION support
 - [ ] Proper error codes and messages
 - [ ] Connection authentication

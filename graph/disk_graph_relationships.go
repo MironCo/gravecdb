@@ -280,3 +280,47 @@ func (g *DiskGraph) deleteRelationshipUnlocked(relID string) error {
 	}
 	return nil
 }
+
+// deleteRelPropertyUnlocked removes a property from a relationship (caller must hold write lock)
+func (g *DiskGraph) deleteRelPropertyUnlocked(relID, key string) error {
+	rel, err := g.boltStore.GetRelationship(relID)
+	if err != nil {
+		return err
+	}
+	if rel == nil {
+		return fmt.Errorf("relationship not found: %s", relID)
+	}
+
+	if _, exists := rel.Properties[key]; !exists {
+		return nil
+	}
+
+	now := time.Now()
+	rel.ValidTo = &now
+
+	newRel := &Relationship{
+		ID:         rel.ID,
+		Type:       rel.Type,
+		FromNodeID: rel.FromNodeID,
+		ToNodeID:   rel.ToNodeID,
+		Properties: make(map[string]interface{}),
+		ValidFrom:  now,
+		ValidTo:    nil,
+	}
+
+	for k, v := range rel.Properties {
+		if k != key {
+			newRel.Properties[k] = v
+		}
+	}
+
+	if err := g.boltStore.SaveRelationship(rel); err != nil {
+		return err
+	}
+	if err := g.boltStore.SaveRelationship(newRel); err != nil {
+		return err
+	}
+
+	g.relCache.Add(relID, newRel)
+	return nil
+}
