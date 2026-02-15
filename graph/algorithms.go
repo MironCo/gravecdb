@@ -14,13 +14,13 @@ type Path struct {
 
 // ShortestPath finds the shortest path between two nodes using BFS
 // Returns nil if no path exists
-func (g *Graph) ShortestPath(fromID, toID string) *Path {
+func (g *memGraph) ShortestPath(fromID, toID string) *Path {
 	return g.ShortestPathAt(fromID, toID, nil)
 }
 
 // ShortestPathAt finds the shortest path between two nodes at a specific point in time
 // If asOf is nil, uses current time (same as ShortestPath)
-func (g *Graph) ShortestPathAt(fromID, toID string, asOf *time.Time) *Path {
+func (g *memGraph) ShortestPathAt(fromID, toID string, asOf *time.Time) *Path {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -61,7 +61,7 @@ func (g *Graph) ShortestPathAt(fromID, toID string, asOf *time.Time) *Path {
 		}
 
 		// Explore neighbors
-		rels := g.GetRelationshipsForNode(currentID)
+		rels := g.getRelationshipsForNode(currentID)
 		for _, rel := range rels {
 			// Check if relationship was valid at the given time
 			if asOf == nil {
@@ -116,14 +116,14 @@ func (g *Graph) ShortestPathAt(fromID, toID string, asOf *time.Time) *Path {
 
 // AllPaths finds all simple paths between two nodes (no repeated nodes)
 // maxDepth limits the search depth to avoid infinite loops (0 = unlimited)
-func (g *Graph) AllPaths(fromID, toID string, maxDepth int) []*Path {
+func (g *memGraph) AllPaths(fromID, toID string, maxDepth int) []*Path {
 	return g.AllPathsAt(fromID, toID, maxDepth, nil)
 }
 
 // AllPathsAt finds all simple paths between two nodes at a specific point in time
 // maxDepth limits the search depth to avoid infinite loops (0 = unlimited)
 // If asOf is nil, uses current time (same as AllPaths)
-func (g *Graph) AllPathsAt(fromID, toID string, maxDepth int, asOf *time.Time) []*Path {
+func (g *memGraph) AllPathsAt(fromID, toID string, maxDepth int, asOf *time.Time) []*Path {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -156,7 +156,7 @@ func (g *Graph) AllPathsAt(fromID, toID string, maxDepth int, asOf *time.Time) [
 }
 
 // PathExists checks if any path exists between two nodes
-func (g *Graph) PathExists(fromID, toID string) bool {
+func (g *memGraph) PathExists(fromID, toID string) bool {
 	return g.ShortestPath(fromID, toID) != nil
 }
 
@@ -168,7 +168,7 @@ type pathStep struct {
 	previousID   string
 }
 
-func (g *Graph) reconstructPath(fromID, toID string, parent map[string]*pathStep) *Path {
+func (g *memGraph) reconstructPath(fromID, toID string, parent map[string]*pathStep) *Path {
 	path := &Path{
 		Nodes:         []*Node{},
 		Relationships: []*Relationship{},
@@ -208,7 +208,7 @@ func (g *Graph) reconstructPath(fromID, toID string, parent map[string]*pathStep
 	return path
 }
 
-func (g *Graph) dfsAllPaths(currentID, targetID string, visited map[string]bool, currentPath *Path, allPaths *[]*Path, maxDepth, currentDepth int, asOf *time.Time) {
+func (g *memGraph) dfsAllPaths(currentID, targetID string, visited map[string]bool, currentPath *Path, allPaths *[]*Path, maxDepth, currentDepth int, asOf *time.Time) {
 	// Check depth limit
 	if maxDepth > 0 && currentDepth >= maxDepth {
 		return
@@ -250,7 +250,7 @@ func (g *Graph) dfsAllPaths(currentID, targetID string, visited map[string]bool,
 		*allPaths = append(*allPaths, pathCopy)
 	} else {
 		// Explore neighbors
-		rels := g.GetRelationshipsForNode(currentID)
+		rels := g.getRelationshipsForNode(currentID)
 		for _, rel := range rels {
 			// Check if relationship was valid at the given time
 			if asOf == nil {
@@ -303,13 +303,13 @@ func (g *Graph) dfsAllPaths(currentID, targetID string, visited map[string]bool,
 }
 
 // getNodeByID is a helper that finds a node by ID (assumes lock is held)
-func (g *Graph) getNodeByID(id string) *Node {
+func (g *memGraph) getNodeByID(id string) *Node {
 	// Direct lookup in nodes map
 	return g.nodes[id]
 }
 
 // GetNodeByID is the public version that acquires the lock
-func (g *Graph) GetNodeByID(id string) *Node {
+func (g *memGraph) GetNodeByID(id string) *Node {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return g.getNodeByID(id)

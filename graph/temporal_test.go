@@ -7,7 +7,8 @@ import (
 
 // TestTemporalNodeProperties tests that node property changes are tracked over time
 func TestTemporalNodeProperties(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	// Create a node with initial properties
 	alice := db.CreateNode("Person")
@@ -61,7 +62,8 @@ func TestTemporalNodeProperties(t *testing.T) {
 
 // TestTemporalRelationships tests that relationships are tracked over time
 func TestTemporalRelationships(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	// Create nodes
 	alice := db.CreateNode("Person")
@@ -119,7 +121,8 @@ func TestTemporalRelationships(t *testing.T) {
 
 // TestTemporalNodeDeletion tests that deleted nodes are still accessible historically
 func TestTemporalNodeDeletion(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	// Create a node
 	alice := db.CreateNode("Person")
@@ -151,7 +154,8 @@ func TestTemporalNodeDeletion(t *testing.T) {
 
 // TestTemporalRelationshipProperties tests that relationship property changes are tracked
 func TestTemporalRelationshipProperties(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	// Create nodes and relationship
 	alice := db.CreateNode("Person")
@@ -189,7 +193,8 @@ func TestTemporalRelationshipProperties(t *testing.T) {
 
 // TestTemporalComplexScenario tests a complex scenario with multiple changes
 func TestTemporalComplexScenario(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	// Create initial state
 	alice := db.CreateNode("Person")
@@ -323,7 +328,8 @@ func TestTemporalComplexScenario(t *testing.T) {
 
 // TestAsOfWithNonexistentNode tests querying for a node that didn't exist yet
 func TestAsOfWithNonexistentNode(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	// Record time before creating node
 	time1 := time.Now()
@@ -349,7 +355,8 @@ func TestAsOfWithNonexistentNode(t *testing.T) {
 
 // TestTemporalQueryAtExactCreationTime tests querying at the exact moment of creation
 func TestTemporalQueryAtExactCreationTime(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	alice := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
@@ -365,7 +372,8 @@ func TestTemporalQueryAtExactCreationTime(t *testing.T) {
 
 // TestTemporalRapidUpdates tests multiple rapid property updates
 func TestTemporalRapidUpdates(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	alice := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
@@ -397,7 +405,8 @@ func TestTemporalRapidUpdates(t *testing.T) {
 
 // TestTemporalPropertyRemovalAndReaddition tests removing and re-adding properties
 func TestTemporalPropertyRemovalAndReaddition(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	alice := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
@@ -453,7 +462,8 @@ func TestTemporalPropertyRemovalAndReaddition(t *testing.T) {
 
 // TestTemporalMultipleNodesWithSameLabel tests temporal queries with multiple nodes
 func TestTemporalMultipleNodesWithSameLabel(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	// Create initial state with 2 people
 	alice := db.CreateNode("Person")
@@ -498,7 +508,8 @@ func TestTemporalMultipleNodesWithSameLabel(t *testing.T) {
 
 // TestTemporalRelationshipPropertyCascade tests relationship properties changing multiple times
 func TestTemporalRelationshipPropertyCascade(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	alice := db.CreateNode("Person")
 	bob := db.CreateNode("Person")
@@ -550,7 +561,8 @@ func TestTemporalRelationshipPropertyCascade(t *testing.T) {
 
 // TestTemporalEmptyGraph tests temporal queries on an empty graph
 func TestTemporalEmptyGraph(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	pastTime := time.Now()
 
@@ -569,7 +581,8 @@ func TestTemporalEmptyGraph(t *testing.T) {
 
 // TestTemporalFutureQuery tests querying the graph at a future time
 func TestTemporalFutureQuery(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	alice := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")

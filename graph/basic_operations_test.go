@@ -4,25 +4,29 @@ import "testing"
 
 // TestBasicNodeOperations tests creating nodes and setting properties
 func TestBasicNodeOperations(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	// Create nodes
 	alice := db.CreateNode("Person")
-	alice.SetProperty("name", "Alice")
-	alice.SetProperty("age", 30)
+	db.SetNodeProperty(alice.ID, "name", "Alice")
+	db.SetNodeProperty(alice.ID, "age", 30)
 
 	bob := db.CreateNode("Person")
-	bob.SetProperty("name", "Bob")
-	bob.SetProperty("age", 25)
+	db.SetNodeProperty(bob.ID, "name", "Bob")
+	db.SetNodeProperty(bob.ID, "age", 25)
 
 	company := db.CreateNode("Company")
-	company.SetProperty("name", "TechCorp")
-	company.SetProperty("founded", 2020)
+	db.SetNodeProperty(company.ID, "name", "TechCorp")
+	db.SetNodeProperty(company.ID, "founded", 2020)
 
 	// Verify nodes were created
 	if alice == nil || bob == nil || company == nil {
 		t.Fatal("Failed to create nodes")
 	}
+
+	// Refresh alice to get updated properties
+	alice, _ = db.GetNode(alice.ID)
 
 	// Verify properties
 	if name, _ := alice.GetProperty("name"); name != "Alice" {
@@ -46,36 +50,41 @@ func TestBasicNodeOperations(t *testing.T) {
 
 // TestBasicRelationshipOperations tests creating relationships and relationship properties
 func TestBasicRelationshipOperations(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	// Create nodes
 	alice := db.CreateNode("Person")
-	alice.SetProperty("name", "Alice")
+	db.SetNodeProperty(alice.ID, "name", "Alice")
 
 	bob := db.CreateNode("Person")
-	bob.SetProperty("name", "Bob")
+	db.SetNodeProperty(bob.ID, "name", "Bob")
 
 	company := db.CreateNode("Company")
-	company.SetProperty("name", "TechCorp")
+	db.SetNodeProperty(company.ID, "name", "TechCorp")
 
 	// Create relationships
 	friendship, err := db.CreateRelationship("FRIENDS_WITH", alice.ID, bob.ID)
 	if err != nil {
 		t.Fatalf("Failed to create friendship relationship: %v", err)
 	}
-	friendship.SetProperty("since", 2015)
+	db.SetRelationshipProperty(friendship.ID, "since", 2015)
 
 	employment1, err := db.CreateRelationship("WORKS_AT", alice.ID, company.ID)
 	if err != nil {
 		t.Fatalf("Failed to create employment relationship: %v", err)
 	}
-	employment1.SetProperty("role", "Engineer")
+	db.SetRelationshipProperty(employment1.ID, "role", "Engineer")
 
 	employment2, err := db.CreateRelationship("WORKS_AT", bob.ID, company.ID)
 	if err != nil {
 		t.Fatalf("Failed to create employment relationship: %v", err)
 	}
-	employment2.SetProperty("role", "Designer")
+	db.SetRelationshipProperty(employment2.ID, "role", "Designer")
+
+	// Refresh relationship to get updated properties
+	friendship, _ = db.GetRelationship(friendship.ID)
+	employment1, _ = db.GetRelationship(employment1.ID)
 
 	// Verify relationship properties
 	if since, _ := friendship.GetProperty("since"); since != 2015 {
@@ -100,17 +109,18 @@ func TestBasicRelationshipOperations(t *testing.T) {
 
 // TestRelationshipQueries tests querying relationships and traversing the graph
 func TestRelationshipQueries(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	// Create nodes
 	alice := db.CreateNode("Person")
-	alice.SetProperty("name", "Alice")
+	db.SetNodeProperty(alice.ID, "name", "Alice")
 
 	bob := db.CreateNode("Person")
-	bob.SetProperty("name", "Bob")
+	db.SetNodeProperty(bob.ID, "name", "Bob")
 
 	company := db.CreateNode("Company")
-	company.SetProperty("name", "TechCorp")
+	db.SetNodeProperty(company.ID, "name", "TechCorp")
 
 	// Create relationships
 	db.CreateRelationship("FRIENDS_WITH", alice.ID, bob.ID)
@@ -154,10 +164,11 @@ func TestRelationshipQueries(t *testing.T) {
 
 // TestNodeRetrieval tests getting nodes by ID
 func TestNodeRetrieval(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	alice := db.CreateNode("Person")
-	alice.SetProperty("name", "Alice")
+	db.SetNodeProperty(alice.ID, "name", "Alice")
 
 	// Get node by ID
 	retrieved, err := db.GetNode(alice.ID)

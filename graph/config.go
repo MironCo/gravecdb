@@ -127,15 +127,19 @@ func ParseDSN(dsn string) (*Config, error) {
 }
 
 // Open creates a new graph database from the config
-// Returns GraphDB interface - defaults to disk-first mode (low RAM, unlimited size)
-func (cfg *Config) Open() (GraphDB, error) {
-	if cfg.DataDir == "" {
-		// In-memory only (no persistence)
-		return NewGraph(), nil
+// Returns *DiskGraph - if no DataDir is specified, uses a temp directory
+func (cfg *Config) Open() (*DiskGraph, error) {
+	dataDir := cfg.DataDir
+	if dataDir == "" {
+		// Use temp directory for in-memory-like behavior
+		var err error
+		dataDir, err = os.MkdirTemp("", "gravecdb-")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create temp directory: %w", err)
+		}
 	}
 
-	// Default: disk-first mode with bbolt (low RAM, unlimited size)
-	return NewDiskGraph(cfg.DataDir, 10000) // 10k node cache by default
+	return NewDiskGraph(dataDir, 10000) // 10k node cache by default
 }
 
 // RequiresAuth returns true if authentication is configured

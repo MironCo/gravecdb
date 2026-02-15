@@ -15,7 +15,7 @@ import (
 )
 
 // Global graph instance
-var db graph.GraphDB
+var db *graph.DiskGraph
 var serverConfig *graph.ServerConfig
 var embedder embedding.Embedder
 

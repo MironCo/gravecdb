@@ -23,10 +23,11 @@ func (g *DiskGraph) GetNode(id string) (*Node, error) {
 		return nil, err
 	}
 
-	if node != nil {
-		g.nodeCache.Add(id, node)
+	if node == nil {
+		return nil, fmt.Errorf("node not found: %s", id)
 	}
 
+	g.nodeCache.Add(id, node)
 	return node, nil
 }
 
@@ -241,5 +242,53 @@ func (g *DiskGraph) deleteNodeUnlocked(nodeID string) error {
 
 		g.nodeCache.Remove(nodeID)
 	}
+	return nil
+}
+
+// DeleteNodeProperty removes a property from a node
+// Creates a new version of the node without the property
+func (g *DiskGraph) DeleteNodeProperty(nodeID, key string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	currentNode, err := g.boltStore.GetNode(nodeID)
+	if err != nil {
+		return err
+	}
+	if currentNode == nil {
+		return fmt.Errorf("node not found: %s", nodeID)
+	}
+
+	// Check if property exists
+	if _, exists := currentNode.Properties[key]; !exists {
+		return nil // Nothing to delete
+	}
+
+	now := time.Now()
+	currentNode.ValidTo = &now
+
+	// Create new version without the property
+	newNode := &Node{
+		ID:         currentNode.ID,
+		Labels:     currentNode.Labels,
+		Properties: make(map[string]interface{}),
+		ValidFrom:  now,
+		ValidTo:    nil,
+	}
+
+	for k, v := range currentNode.Properties {
+		if k != key {
+			newNode.Properties[k] = v
+		}
+	}
+
+	if err := g.boltStore.SaveNode(currentNode); err != nil {
+		return fmt.Errorf("failed to save old version: %w", err)
+	}
+	if err := g.boltStore.SaveNode(newNode); err != nil {
+		return fmt.Errorf("failed to save new version: %w", err)
+	}
+
+	g.nodeCache.Add(nodeID, newNode)
 	return nil
 }

@@ -132,12 +132,12 @@ func (g *DiskGraph) AsOf(t time.Time) *TemporalView {
 	defer g.mu.RUnlock()
 
 	// Create a new in-memory graph
-	snapshot := NewGraph()
+	snapshot := newMemGraph()
 
 	// Load all nodes from disk and filter by time
 	allNodes, err := g.boltStore.GetAllNodes()
 	if err != nil {
-		return snapshot.AsOf(t)
+		return snapshot.asOf(t)
 	}
 
 	for _, node := range allNodes {
@@ -161,7 +161,7 @@ func (g *DiskGraph) AsOf(t time.Time) *TemporalView {
 	// Load all relationships from disk and filter by time
 	allRels, err := g.boltStore.GetAllRelationships()
 	if err != nil {
-		return snapshot.AsOf(t)
+		return snapshot.asOf(t)
 	}
 
 	for _, rel := range allRels {
@@ -178,7 +178,7 @@ func (g *DiskGraph) AsOf(t time.Time) *TemporalView {
 	// Load embeddings
 	allEmbs, err := g.boltStore.GetAllEmbeddings()
 	if err != nil {
-		return snapshot.AsOf(t)
+		return snapshot.asOf(t)
 	}
 
 	for nodeID, embeddings := range allEmbs {
@@ -187,7 +187,7 @@ func (g *DiskGraph) AsOf(t time.Time) *TemporalView {
 		}
 	}
 
-	return snapshot.AsOf(t)
+	return snapshot.asOf(t)
 }
 
 // GetAllNodeVersions returns all versions of all nodes (for building timelines)
@@ -215,8 +215,8 @@ func (g *DiskGraph) GetAllRelationshipVersions() []*Relationship {
 }
 
 // loadIntoMemory creates an in-memory graph with current data (for complex operations)
-func (g *DiskGraph) loadIntoMemory() *Graph {
-	memGraph := NewGraph()
+func (g *DiskGraph) loadIntoMemory() *memGraph {
+	memGraph := newMemGraph()
 
 	nodes, _ := g.boltStore.GetAllNodes()
 	for _, n := range nodes {
@@ -242,8 +242,8 @@ func (g *DiskGraph) loadIntoMemory() *Graph {
 }
 
 // loadIntoMemoryUnlocked creates an in-memory graph (caller must hold lock)
-func (g *DiskGraph) loadIntoMemoryUnlocked() *Graph {
-	memGraph := NewGraph()
+func (g *DiskGraph) loadIntoMemoryUnlocked() *memGraph {
+	memGraph := newMemGraph()
 
 	nodes, _ := g.boltStore.GetAllNodes()
 	for _, n := range nodes {
@@ -280,6 +280,11 @@ func (g *DiskGraph) AllPaths(fromID, toID string, maxDepth int) []*Path {
 	// Delegate to in-memory graph for path finding (complex traversal operation)
 	memGraph := g.loadIntoMemory()
 	return memGraph.AllPaths(fromID, toID, maxDepth)
+}
+
+// PathExists checks if any path exists between two nodes
+func (g *DiskGraph) PathExists(fromID, toID string) bool {
+	return g.ShortestPath(fromID, toID) != nil
 }
 
 // removeFromRelIndex removes a relationship ID from a node's relationship index

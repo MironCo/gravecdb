@@ -102,12 +102,12 @@ func toFloat64ForCompare(v interface{}) (float64, bool) {
 type Embedder = embedding.Embedder
 
 // ExecuteQuery executes a parsed query against the graph
-func (g *Graph) ExecuteQuery(query *Query) (*QueryResult, error) {
+func (g *memGraph) ExecuteQuery(query *Query) (*QueryResult, error) {
 	return g.ExecuteQueryWithEmbedder(query, nil)
 }
 
 // ExecuteQueryWithEmbedder executes a query with an optional embedder for EMBED/SIMILAR TO clauses
-func (g *Graph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*QueryResult, error) {
+func (g *memGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*QueryResult, error) {
 	switch query.QueryType {
 	case "CREATE":
 		return g.executeCreateQuery(query)
@@ -139,7 +139,7 @@ func (g *Graph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*Quer
 }
 
 // executeMatchQuery executes a regular MATCH query
-func (g *Graph) executeMatchQuery(query *Query) (*QueryResult, error) {
+func (g *memGraph) executeMatchQuery(query *Query) (*QueryResult, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -166,7 +166,7 @@ func (g *Graph) executeMatchQuery(query *Query) (*QueryResult, error) {
 type Match map[string]interface{} // variable -> node or relationship
 
 // findMatches finds all matches of the pattern in the graph
-func (g *Graph) findMatches(pattern *MatchPattern, timeClause *TimeClause) []Match {
+func (g *memGraph) findMatches(pattern *MatchPattern, timeClause *TimeClause) []Match {
 	if len(pattern.Nodes) == 0 {
 		return nil
 	}
@@ -235,7 +235,7 @@ func (g *Graph) findMatches(pattern *MatchPattern, timeClause *TimeClause) []Mat
 
 // findDisconnectedMatches handles MATCH (a:Label), (b:Label) with no relationships
 // Returns Cartesian product of all matching nodes
-func (g *Graph) findDisconnectedMatches(nodePatterns []NodePattern, queryTime *time.Time) []Match {
+func (g *memGraph) findDisconnectedMatches(nodePatterns []NodePattern, queryTime *time.Time) []Match {
 	if len(nodePatterns) == 0 {
 		return nil
 	}
@@ -295,7 +295,7 @@ func (g *Graph) findDisconnectedMatches(nodePatterns []NodePattern, queryTime *t
 }
 
 // extendWithDisconnectedNodes extends existing matches with disconnected node patterns
-func (g *Graph) extendWithDisconnectedNodes(matches []Match, nodePatterns []NodePattern, disconnectedIndices []int, queryTime *time.Time) []Match {
+func (g *memGraph) extendWithDisconnectedNodes(matches []Match, nodePatterns []NodePattern, disconnectedIndices []int, queryTime *time.Time) []Match {
 	for _, idx := range disconnectedIndices {
 		pattern := nodePatterns[idx]
 		candidates := g.getCandidateNodes(pattern)
@@ -330,7 +330,7 @@ func (g *Graph) extendWithDisconnectedNodes(matches []Match, nodePatterns []Node
 
 // getQueryTime converts a TimeClause to an actual time.Time for querying
 // Returns nil if no temporal filtering should be applied (current time query)
-func (g *Graph) getQueryTime(timeClause *TimeClause) *time.Time {
+func (g *memGraph) getQueryTime(timeClause *TimeClause) *time.Time {
 	if timeClause == nil {
 		return nil // No temporal filtering
 	}
@@ -363,7 +363,7 @@ func (g *Graph) getQueryTime(timeClause *TimeClause) *time.Time {
 }
 
 // extendMatch recursively extends a partial match
-func (g *Graph) extendMatch(currentMatch Match, pattern *MatchPattern, relIndex int, queryTime *time.Time, allMatches *[]Match) {
+func (g *memGraph) extendMatch(currentMatch Match, pattern *MatchPattern, relIndex int, queryTime *time.Time, allMatches *[]Match) {
 	// Base case: if we've matched all relationships, we have a complete match
 	if relIndex >= len(pattern.Relationships) {
 		// Create a copy of the match
@@ -479,7 +479,7 @@ func (g *Graph) extendMatch(currentMatch Match, pattern *MatchPattern, relIndex 
 }
 
 // getCandidateNodes returns all nodes that match a node pattern
-func (g *Graph) getCandidateNodes(pattern NodePattern) []*Node {
+func (g *memGraph) getCandidateNodes(pattern NodePattern) []*Node {
 	var rawCandidates []*Node
 
 	if len(pattern.Labels) > 0 {
@@ -510,7 +510,7 @@ func (g *Graph) getCandidateNodes(pattern NodePattern) []*Node {
 }
 
 // nodeMatchesPattern checks if a node matches a pattern
-func (g *Graph) nodeMatchesPattern(node *Node, pattern NodePattern) bool {
+func (g *memGraph) nodeMatchesPattern(node *Node, pattern NodePattern) bool {
 	// Check if node has all required labels
 	if len(pattern.Labels) > 0 {
 		for _, requiredLabel := range pattern.Labels {
@@ -543,7 +543,7 @@ func (g *Graph) nodeMatchesPattern(node *Node, pattern NodePattern) bool {
 }
 
 // filterMatches applies WHERE clause filters to matches
-func (g *Graph) filterMatches(matches []Match, whereClause *WhereClause) []Match {
+func (g *memGraph) filterMatches(matches []Match, whereClause *WhereClause) []Match {
 	filtered := []Match{}
 
 	for _, match := range matches {
@@ -556,7 +556,7 @@ func (g *Graph) filterMatches(matches []Match, whereClause *WhereClause) []Match
 }
 
 // matchSatisfiesWhere checks if a match satisfies all WHERE conditions
-func (g *Graph) matchSatisfiesWhere(match Match, whereClause *WhereClause) bool {
+func (g *memGraph) matchSatisfiesWhere(match Match, whereClause *WhereClause) bool {
 	for _, condition := range whereClause.Conditions {
 		if !g.evaluateCondition(match, condition) {
 			return false
@@ -566,7 +566,7 @@ func (g *Graph) matchSatisfiesWhere(match Match, whereClause *WhereClause) bool 
 }
 
 // evaluateCondition evaluates a single WHERE condition
-func (g *Graph) evaluateCondition(match Match, condition Condition) bool {
+func (g *memGraph) evaluateCondition(match Match, condition Condition) bool {
 	// Get the entity (node or relationship)
 	entity, ok := match[condition.Variable]
 	if !ok {
@@ -606,7 +606,7 @@ func (g *Graph) evaluateCondition(match Match, condition Condition) bool {
 }
 
 // compareNumeric compares two values numerically
-func (g *Graph) compareNumeric(a, b interface{}, operator string) bool {
+func (g *memGraph) compareNumeric(a, b interface{}, operator string) bool {
 	aFloat, aOk := toFloat(a)
 	bFloat, bOk := toFloat(b)
 	if !aOk || !bOk {
@@ -645,7 +645,7 @@ func toFloat(v interface{}) (float64, bool) {
 
 // buildResult constructs the query result based on RETURN clause
 // Handles aggregation, DISTINCT, ORDER BY, SKIP, and LIMIT
-func (g *Graph) buildResult(matches []Match, returnClause *ReturnClause) *QueryResult {
+func (g *memGraph) buildResult(matches []Match, returnClause *ReturnClause) *QueryResult {
 	result := &QueryResult{
 		Columns: []string{},
 		Rows:    []map[string]interface{}{},
@@ -725,7 +725,7 @@ func getColumnName(item ReturnItem) string {
 }
 
 // buildRowFromMatch builds a single row from a match
-func (g *Graph) buildRowFromMatch(match Match, items []ReturnItem) map[string]interface{} {
+func (g *memGraph) buildRowFromMatch(match Match, items []ReturnItem) map[string]interface{} {
 	row := map[string]interface{}{}
 
 	for _, item := range items {
@@ -753,7 +753,7 @@ func (g *Graph) buildRowFromMatch(match Match, items []ReturnItem) map[string]in
 }
 
 // buildAggregatedRows handles aggregation functions like COUNT, SUM, AVG, etc.
-func (g *Graph) buildAggregatedRows(matches []Match, returnClause *ReturnClause) []map[string]interface{} {
+func (g *memGraph) buildAggregatedRows(matches []Match, returnClause *ReturnClause) []map[string]interface{} {
 	// Find grouping columns (non-aggregated items)
 	var groupByItems []ReturnItem
 	var aggItems []ReturnItem
@@ -831,7 +831,7 @@ func (g *Graph) buildAggregatedRows(matches []Match, returnClause *ReturnClause)
 }
 
 // buildGroupKey creates a string key for grouping matches
-func (g *Graph) buildGroupKey(match Match, groupByItems []ReturnItem) string {
+func (g *memGraph) buildGroupKey(match Match, groupByItems []ReturnItem) string {
 	var parts []string
 	for _, item := range groupByItems {
 		entity, ok := match[item.Variable]
@@ -860,7 +860,7 @@ func (g *Graph) buildGroupKey(match Match, groupByItems []ReturnItem) string {
 }
 
 // computeAggregation computes an aggregation function over matches
-func (g *Graph) computeAggregation(matches []Match, item ReturnItem) interface{} {
+func (g *memGraph) computeAggregation(matches []Match, item ReturnItem) interface{} {
 	switch strings.ToUpper(item.Aggregation) {
 	case "COUNT":
 		if item.Variable == "*" {
@@ -954,7 +954,7 @@ func (g *Graph) computeAggregation(matches []Match, item ReturnItem) interface{}
 }
 
 // getNumericValue extracts a numeric value from a match for aggregation
-func (g *Graph) getNumericValue(match Match, item ReturnItem) *float64 {
+func (g *memGraph) getNumericValue(match Match, item ReturnItem) *float64 {
 	entity, ok := match[item.Variable]
 	if !ok {
 		return nil
@@ -1075,7 +1075,7 @@ func getOrderValue(row map[string]interface{}, colName string, order OrderItem) 
 
 
 // executePathQuery executes a path-finding query
-func (g *Graph) executePathQuery(query *Query) (*QueryResult, error) {
+func (g *memGraph) executePathQuery(query *Query) (*QueryResult, error) {
 	pf := query.MatchPattern.PathFunction
 
 	// Find all candidate start nodes
@@ -1167,7 +1167,7 @@ func (g *Graph) executePathQuery(query *Query) (*QueryResult, error) {
 }
 
 // executeCreateQuery executes a CREATE query
-func (g *Graph) executeCreateQuery(query *Query) (*QueryResult, error) {
+func (g *memGraph) executeCreateQuery(query *Query) (*QueryResult, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -1262,7 +1262,7 @@ func (g *Graph) executeCreateQuery(query *Query) (*QueryResult, error) {
 }
 
 // executeMatchCreateQuery executes a MATCH...CREATE query
-func (g *Graph) executeMatchCreateQuery(query *Query) (*QueryResult, error) {
+func (g *memGraph) executeMatchCreateQuery(query *Query) (*QueryResult, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -1390,7 +1390,7 @@ func (g *Graph) executeMatchCreateQuery(query *Query) (*QueryResult, error) {
 }
 
 // executeSetQuery executes a MATCH...SET query
-func (g *Graph) executeSetQuery(query *Query) (*QueryResult, error) {
+func (g *memGraph) executeSetQuery(query *Query) (*QueryResult, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -1444,7 +1444,7 @@ func (g *Graph) executeSetQuery(query *Query) (*QueryResult, error) {
 }
 
 // executeDeleteQuery executes a MATCH...DELETE query
-func (g *Graph) executeDeleteQuery(query *Query) (*QueryResult, error) {
+func (g *memGraph) executeDeleteQuery(query *Query) (*QueryResult, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -1501,7 +1501,7 @@ func (g *Graph) executeDeleteQuery(query *Query) (*QueryResult, error) {
 }
 
 // executeEmbedQuery executes a MATCH...EMBED query to generate embeddings for matched nodes
-func (g *Graph) executeEmbedQuery(query *Query, embedder Embedder) (*QueryResult, error) {
+func (g *memGraph) executeEmbedQuery(query *Query, embedder Embedder) (*QueryResult, error) {
 	if embedder == nil {
 		return nil, fmt.Errorf("embedder required for EMBED clause")
 	}
@@ -1579,7 +1579,7 @@ func (g *Graph) executeEmbedQuery(query *Query, embedder Embedder) (*QueryResult
 }
 
 // generateAutoEmbedText generates embedding text from node labels and properties
-func (g *Graph) generateAutoEmbedText(node *Node) string {
+func (g *memGraph) generateAutoEmbedText(node *Node) string {
 	var parts []string
 
 	// Add labels
@@ -1596,7 +1596,7 @@ func (g *Graph) generateAutoEmbedText(node *Node) string {
 }
 
 // executeSimilarToQuery executes a MATCH...SIMILAR TO semantic search query
-func (g *Graph) executeSimilarToQuery(query *Query, embedder Embedder) (*QueryResult, error) {
+func (g *memGraph) executeSimilarToQuery(query *Query, embedder Embedder) (*QueryResult, error) {
 	if embedder == nil {
 		return nil, fmt.Errorf("embedder required for SIMILAR TO clause")
 	}

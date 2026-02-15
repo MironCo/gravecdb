@@ -4,7 +4,8 @@ import "testing"
 
 // TestShortestPath tests finding the shortest path between nodes
 func TestShortestPath(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	// Create a network of nodes
 	alice := db.CreateNode("Person")
@@ -66,7 +67,8 @@ func TestShortestPath(t *testing.T) {
 
 // TestAllPaths tests finding all paths between nodes
 func TestAllPaths(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	// Create a simple network
 	alice := db.CreateNode("Person")
@@ -101,7 +103,8 @@ func TestAllPaths(t *testing.T) {
 
 // TestPathExistence tests checking if a path exists
 func TestPathExistence(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	alice := db.CreateNode("Person")
 	bob := db.CreateNode("Person")
@@ -130,7 +133,8 @@ func TestPathExistence(t *testing.T) {
 
 // TestNoPath tests behavior when no path exists
 func TestNoPath(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	alice := db.CreateNode("Person")
 	bob := db.CreateNode("Person")
@@ -149,7 +153,8 @@ func TestNoPath(t *testing.T) {
 
 // TestSelfPath tests path from node to itself
 func TestSelfPath(t *testing.T) {
-	db := NewGraph()
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
 
 	alice := db.CreateNode("Person")
 
