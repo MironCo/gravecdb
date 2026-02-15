@@ -8,12 +8,16 @@ import (
 )
 
 // GetNode retrieves a node (from cache if present, otherwise from disk)
+// Returns error if node doesn't exist or has been deleted
 func (g *DiskGraph) GetNode(id string) (*Node, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
 	// Check cache first
 	if node, ok := g.nodeCache.Get(id); ok {
+		if node.ValidTo != nil {
+			return nil, fmt.Errorf("node not found: %s", id)
+		}
 		return node, nil
 	}
 
@@ -23,7 +27,7 @@ func (g *DiskGraph) GetNode(id string) (*Node, error) {
 		return nil, err
 	}
 
-	if node == nil {
+	if node == nil || node.ValidTo != nil {
 		return nil, fmt.Errorf("node not found: %s", id)
 	}
 
@@ -216,6 +220,23 @@ func (g *DiskGraph) DeleteNode(nodeID string) error {
 	}
 	// Clear this node's relationship index
 	delete(g.nodeRelIndex, nodeID)
+
+	// Remove from node cache
+	g.nodeCache.Remove(nodeID)
+
+	// Remove from label index
+	node, _ := g.boltStore.GetNode(nodeID)
+	if node != nil {
+		for _, label := range node.Labels {
+			ids := g.labelIndex[label]
+			for i, id := range ids {
+				if id == nodeID {
+					g.labelIndex[label] = append(ids[:i], ids[i+1:]...)
+					break
+				}
+			}
+		}
+	}
 
 	// Soft delete the node
 	return g.boltStore.DeleteNode(nodeID, now)

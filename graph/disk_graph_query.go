@@ -1,6 +1,9 @@
 package graph
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ExecuteQueryWithEmbedder executes a Cypher-like query
 func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*QueryResult, error) {
@@ -20,6 +23,10 @@ func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*
 		}
 		if query.DeleteClause != nil {
 			return g.executeDeleteQuery(query)
+		}
+		// Handle EMBED queries specially - need to persist embeddings
+		if query.EmbedClause != nil {
+			return g.executeEmbedQuery(query, embedder)
 		}
 		// Read-only MATCH query - use in-memory approach
 		return g.executeReadQuery(query, embedder)
@@ -596,4 +603,100 @@ func toFloat64(v interface{}) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// executeEmbedQuery handles MATCH...EMBED queries and persists embeddings to disk
+func (g *DiskGraph) executeEmbedQuery(query *Query, embedder Embedder) (*QueryResult, error) {
+	if embedder == nil {
+		return nil, fmt.Errorf("embedder required for EMBED clause")
+	}
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// Find matches using index
+	matches := g.findMatchesUnlocked(query.MatchPattern, query.WhereClause)
+
+	embeddedCount := 0
+	ec := query.EmbedClause
+
+	for _, match := range matches {
+		entity, ok := match[ec.Variable]
+		if !ok {
+			continue
+		}
+
+		node, ok := entity.(*Node)
+		if !ok {
+			continue // Can only embed nodes
+		}
+
+		// Generate text based on mode
+		var text string
+		switch ec.Mode {
+		case "AUTO":
+			text = g.generateAutoEmbedText(node)
+		case "TEXT":
+			text = ec.Text
+		case "PROPERTY":
+			if propVal, exists := node.Properties[ec.Property]; exists {
+				text = fmt.Sprint(propVal)
+			} else {
+				continue // Skip nodes without the property
+			}
+		}
+
+		if text == "" {
+			continue
+		}
+
+		// Generate embedding
+		vector, err := embedder.Embed(text)
+		if err != nil {
+			return nil, fmt.Errorf("failed to embed node %s: %w", node.ID, err)
+		}
+
+		// Create property snapshot
+		propertySnapshot := make(map[string]interface{})
+		for k, v := range node.Properties {
+			propertySnapshot[k] = v
+		}
+
+		// Get existing embeddings and append new one
+		existingEmbs, _ := g.boltStore.GetEmbedding(node.ID)
+
+		newEmb := &Embedding{
+			Vector:           vector,
+			Model:            "embedder",
+			PropertySnapshot: propertySnapshot,
+		}
+
+		// Store embedding to disk
+		if err := g.boltStore.SaveEmbedding(node.ID, append(existingEmbs, newEmb)); err != nil {
+			return nil, fmt.Errorf("failed to save embedding: %w", err)
+		}
+		embeddedCount++
+	}
+
+	return &QueryResult{
+		Columns: []string{"embedded"},
+		Rows:    []map[string]interface{}{{"embedded": embeddedCount}},
+	}, nil
+}
+
+// generateAutoEmbedText generates embedding text from node labels and properties
+func (g *DiskGraph) generateAutoEmbedText(node *Node) string {
+	var parts []string
+
+	// Add labels
+	if len(node.Labels) > 0 {
+		parts = append(parts, strings.Join(node.Labels, " "))
+	}
+
+	// Add properties
+	for key, value := range node.Properties {
+		parts = append(parts, fmt.Sprintf("%s: %v", key, value))
+	}
+
+	return strings.Join(parts, ". ")
 }

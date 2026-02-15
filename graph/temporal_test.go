@@ -1,9 +1,24 @@
 package graph
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
+
+// asInt converts a property value to int for comparison
+func asInt(v interface{}) int {
+	switch val := v.(type) {
+	case int:
+		return val
+	case int64:
+		return int(val)
+	case float64:
+		return int(val)
+	default:
+		panic(fmt.Sprintf("cannot convert %T to int", v))
+	}
+}
 
 // TestTemporalNodeProperties tests that node property changes are tracked over time
 func TestTemporalNodeProperties(t *testing.T) {
@@ -175,7 +190,7 @@ func TestTemporalRelationshipProperties(t *testing.T) {
 		t.Fatalf("Failed to get current friendship: %v", err)
 	}
 	currentSince, _ := currentFriendship.GetProperty("since")
-	if currentSince != 2021 {
+	if asInt(currentSince) != 2021 {
 		t.Errorf("Expected current 'since' to be 2021, got %v", currentSince)
 	}
 
@@ -186,7 +201,7 @@ func TestTemporalRelationshipProperties(t *testing.T) {
 		t.Fatalf("Expected 1 relationship at time1, got %d", len(relsAt1))
 	}
 	sinceAt1, _ := relsAt1[0].GetProperty("since")
-	if sinceAt1 != 2020 {
+	if asInt(sinceAt1) != 2020 {
 		t.Errorf("Expected 'since' to be 2020 at time1, got %v", sinceAt1)
 	}
 }
@@ -534,7 +549,7 @@ func TestTemporalRelationshipPropertyCascade(t *testing.T) {
 		t.Fatal("Expected to find relationship at time1")
 	}
 	closeness1, _ := rel1.GetProperty("closeness")
-	if closeness1 != 5 {
+	if asInt(closeness1) != 5 {
 		t.Errorf("Expected closeness 5 at time1, got %v", closeness1)
 	}
 
@@ -544,7 +559,7 @@ func TestTemporalRelationshipPropertyCascade(t *testing.T) {
 		t.Fatal("Expected to find relationship at time2")
 	}
 	closeness2, _ := rel2.GetProperty("closeness")
-	if closeness2 != 7 {
+	if asInt(closeness2) != 7 {
 		t.Errorf("Expected closeness 7 at time2, got %v", closeness2)
 	}
 
@@ -554,7 +569,7 @@ func TestTemporalRelationshipPropertyCascade(t *testing.T) {
 		t.Fatal("Expected to find relationship at time3")
 	}
 	closeness3, _ := rel3.GetProperty("closeness")
-	if closeness3 != 10 {
+	if asInt(closeness3) != 10 {
 		t.Errorf("Expected closeness 10 at time3, got %v", closeness3)
 	}
 }

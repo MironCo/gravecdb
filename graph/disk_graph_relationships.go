@@ -128,6 +128,9 @@ func (g *DiskGraph) SetRelationshipProperty(relID, key string, value interface{}
 		return fmt.Errorf("failed to save new version: %w", err)
 	}
 
+	// Update cache with new version
+	g.relCache.Add(relID, newRel)
+
 	return nil
 }
 
