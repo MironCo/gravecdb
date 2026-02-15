@@ -357,6 +357,22 @@ def test_variable_length_paths(session):
         if len(names) == 3:
             print("  ✓ Found all 3 reachable nodes via NEXT relationship")
 
+    # Test returning the path variable (Bolt Path data type)
+    records = run_test(session, "Return path variable p",
+                       "MATCH (a:Chain {name: 'A'})-[p:NEXT*1..3]->(x:Chain) RETURN p, x.name")
+    if records:
+        for record in records:
+            rec = dict(record)
+            path = rec.get('p')
+            node_name = rec.get('x.name')
+            if path is not None:
+                # Neo4j driver returns Path objects with nodes and relationships
+                if hasattr(path, 'nodes') and hasattr(path, 'relationships'):
+                    print(f"  Path to {node_name}: {len(path.nodes)} nodes, {len(path.relationships)} relationships")
+                    print("  ✓ Path returned as proper Bolt Path type")
+                else:
+                    print(f"  Path to {node_name}: {type(path)} - {path}")
+
     # Cleanup chain nodes
     run_test(session, "Delete chain nodes",
              "MATCH (n:Chain) DETACH DELETE n",

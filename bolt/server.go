@@ -456,6 +456,15 @@ func convertToBoltValue(val interface{}) interface{} {
 		return convertNode(v)
 	case *graph.Relationship:
 		return convertRelationship(v)
+	case *graph.Path:
+		return convertPath(v)
+	case []*graph.Relationship:
+		// Legacy: slice of relationships (convert to list)
+		result := make([]interface{}, len(v))
+		for i, rel := range v {
+			result[i] = convertRelationship(rel)
+		}
+		return result
 	case map[string]interface{}:
 		// Check if it's a node-like map
 		if _, hasID := v["ID"]; hasID {
@@ -489,6 +498,60 @@ func convertRelationship(r *graph.Relationship) *messages.Relationship {
 		EndID:      hashStringID(r.ToNodeID),
 		Type:       r.Type,
 		Properties: r.Properties,
+	}
+}
+
+// convertPath converts a graph.Path to a Bolt Path structure
+// Bolt Path format: nodes (unique), unbound relationships, sequence (indices)
+func convertPath(p *graph.Path) *messages.Path {
+	if p == nil || len(p.Nodes) == 0 {
+		return &messages.Path{
+			Nodes:         []*messages.Node{},
+			Relationships: []*messages.UnboundRelationship{},
+			Sequence:      []int64{},
+		}
+	}
+
+	// Convert nodes (they appear in order in our Path)
+	boltNodes := make([]*messages.Node, len(p.Nodes))
+	nodeIDToIndex := make(map[string]int64)
+	for i, node := range p.Nodes {
+		boltNodes[i] = convertNode(node)
+		nodeIDToIndex[node.ID] = int64(i)
+	}
+
+	// Convert relationships to unbound relationships
+	boltRels := make([]*messages.UnboundRelationship, len(p.Relationships))
+	for i, rel := range p.Relationships {
+		boltRels[i] = &messages.UnboundRelationship{
+			ID:         hashStringID(rel.ID),
+			Type:       rel.Type,
+			Properties: rel.Properties,
+		}
+	}
+
+	// Build sequence: alternating relationship index (1-based) and node index
+	// For path A-[r1]->B-[r2]->C: sequence is [1, 1, 2, 2]
+	// meaning: rel 1 forward to node 1, rel 2 forward to node 2
+	// Negative rel index means traversed backwards
+	sequence := make([]int64, len(p.Relationships)*2)
+	for i, rel := range p.Relationships {
+		relIdx := int64(i + 1) // 1-based index
+
+		// Determine direction: if FromNodeID matches current path node, it's forward
+		currentNodeID := p.Nodes[i].ID
+		if rel.FromNodeID == currentNodeID {
+			sequence[i*2] = relIdx // Forward direction
+		} else {
+			sequence[i*2] = -relIdx // Backward direction
+		}
+		sequence[i*2+1] = int64(i + 1) // Next node index (0-based would be i+1)
+	}
+
+	return &messages.Path{
+		Nodes:         boltNodes,
+		Relationships: boltRels,
+		Sequence:      sequence,
 	}
 }
 

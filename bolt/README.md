@@ -95,7 +95,7 @@ GravecDB implements the Neo4j Bolt protocol (v4.4), allowing connections from st
 | Map | ✅ | |
 | Node | ✅ | Converted to Bolt Node structure |
 | Relationship | ✅ | Converted to Bolt Relationship structure |
-| Path | ❌ | Not yet implemented |
+| Path | ✅ | Full path with nodes, relationships, sequence |
 | Date/Time types | ❌ | Not yet implemented |
 | Point (spatial) | ❌ | Not planned |
 
@@ -110,7 +110,7 @@ GravecDB implements the Neo4j Bolt protocol (v4.4), allowing connections from st
 - [x] ~~Fix SET clause to work with following clauses (RETURN, etc.)~~
 - [x] ~~Implement MERGE clause~~
 - [x] ~~Add variable-length path support `[*1..5]`~~
-- [ ] Implement Path data type for Bolt responses
+- [x] ~~Implement Path data type for Bolt responses~~
 
 ### Medium Priority
 - [x] ~~Implement REMOVE clause~~

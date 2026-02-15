@@ -496,10 +496,11 @@ func (g *memGraph) extendMatchVariableLength(currentMatch Match, pattern *MatchP
 		maxHops = 10 // Reasonable default limit
 	}
 
-	// pathState tracks a node and the path taken to reach it
+	// pathState tracks a node and the full path taken to reach it
 	type pathState struct {
 		node          *Node
-		rels          []*Relationship
+		nodes         []*Node         // All nodes in the path (for Bolt Path support)
+		rels          []*Relationship // All relationships in the path
 		depth         int
 		visitedInPath map[string]bool
 	}
@@ -507,7 +508,13 @@ func (g *memGraph) extendMatchVariableLength(currentMatch Match, pattern *MatchP
 	// BFS queue - each path tracks its own visited nodes
 	initialVisited := make(map[string]bool)
 	initialVisited[startNode.ID] = true
-	queue := []pathState{{node: startNode, rels: nil, depth: 0, visitedInPath: initialVisited}}
+	queue := []pathState{{
+		node:          startNode,
+		nodes:         []*Node{startNode},
+		rels:          nil,
+		depth:         0,
+		visitedInPath: initialVisited,
+	}}
 
 	for len(queue) > 0 {
 		current := queue[0]
@@ -535,7 +542,12 @@ func (g *memGraph) extendMatchVariableLength(currentMatch Match, pattern *MatchP
 						extendedMatch[toNodePattern.Variable] = current.node
 					}
 					if relPattern.Variable != "" {
-						extendedMatch[relPattern.Variable] = current.rels
+						// Store as a Path struct for proper Bolt serialization
+						extendedMatch[relPattern.Variable] = &Path{
+							Nodes:         current.nodes,
+							Relationships: current.rels,
+							Length:        len(current.rels),
+						}
 					}
 
 					// Recurse to match next relationship pattern
@@ -610,6 +622,10 @@ func (g *memGraph) extendMatchVariableLength(currentMatch Match, pattern *MatchP
 			}
 
 			// Build new path with its own visited set
+			newNodes := make([]*Node, len(current.nodes)+1)
+			copy(newNodes, current.nodes)
+			newNodes[len(current.nodes)] = nextNode
+
 			newRels := make([]*Relationship, len(current.rels)+1)
 			copy(newRels, current.rels)
 			newRels[len(current.rels)] = rel
@@ -623,6 +639,7 @@ func (g *memGraph) extendMatchVariableLength(currentMatch Match, pattern *MatchP
 
 			queue = append(queue, pathState{
 				node:          nextNode,
+				nodes:         newNodes,
 				rels:          newRels,
 				depth:         current.depth + 1,
 				visitedInPath: newVisited,
