@@ -73,7 +73,17 @@ func (g *DiskGraph) rebuildLabelIndex() error {
 		return err
 	}
 
+	// Only index current (non-deleted) nodes, and dedupe by ID
+	// (GetAllNodes returns all versions, but we only want one entry per ID)
+	seen := make(map[string]bool)
 	for _, node := range nodes {
+		if node.ValidTo != nil {
+			continue // Skip historical/deleted versions
+		}
+		if seen[node.ID] {
+			continue // Already indexed this ID
+		}
+		seen[node.ID] = true
 		for _, label := range node.Labels {
 			g.labelIndex[label] = append(g.labelIndex[label], node.ID)
 		}

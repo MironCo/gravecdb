@@ -335,7 +335,8 @@ func (p *Parser) parseSetItem() *SetItem {
 	item := &SetItem{}
 
 	// Parse left side (variable or property access)
-	left := p.parseExpression(LOWEST)
+	// Use COMPARISON precedence so we stop at = (which is the SET assignment operator)
+	left := p.parseExpression(COMPARISON)
 
 	// Check for property access
 	if prop, ok := left.(*PropertyAccess); ok {
