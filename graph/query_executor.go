@@ -6,8 +6,41 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MironCo/gravecdb/cypher"
 	"github.com/MironCo/gravecdb/embedding"
 )
+
+// Type aliases for cypher types to minimize code changes
+type Query = cypher.GraphQuery
+type MatchPattern = cypher.GraphMatchPattern
+type NodePattern = cypher.GraphNodePattern
+type RelPattern = cypher.GraphRelPattern
+type PathFunction = cypher.GraphPathFunction
+type TimeClause = cypher.GraphTimeClause
+type WhereClause = cypher.GraphWhereClause
+type Condition = cypher.GraphCondition
+type ReturnClause = cypher.GraphReturnClause
+type ReturnItem = cypher.GraphReturnItem
+type OrderItem = cypher.GraphOrderItem
+type CreateClause = cypher.GraphCreateClause
+type CreateNode = cypher.GraphCreateNode
+type CreateRelationship = cypher.GraphCreateRelationship
+type SetClause = cypher.GraphSetClause
+type PropertyUpdate = cypher.GraphPropertyUpdate
+type DeleteClause = cypher.GraphDeleteClause
+type EmbedClause = cypher.GraphEmbedClause
+type SimilarToClause = cypher.GraphSimilarToClause
+
+// ParseQuery parses a Cypher query string and returns a Query
+func ParseQuery(queryStr string) (*Query, error) {
+	return cypher.ParseToGraph(queryStr)
+}
+
+// QueryResult represents the result of executing a query
+type QueryResult struct {
+	Columns []string
+	Rows    []map[string]interface{}
+}
 
 // valuesEqual compares two values for equality, handling type differences
 func valuesEqual(a, b interface{}) bool {
