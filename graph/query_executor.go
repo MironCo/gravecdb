@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/MironCo/gravecdb/embedding"
 )
 
 // valuesEqual compares two values for equality, handling type differences
@@ -63,10 +65,8 @@ func toFloat64ForCompare(v interface{}) (float64, bool) {
 	}
 }
 
-// Embedder interface for generating embeddings
-type Embedder interface {
-	Embed(text string) ([]float32, error)
-}
+// Embedder is the interface for generating embeddings
+type Embedder = embedding.Embedder
 
 // ExecuteQuery executes a parsed query against the graph
 func (g *Graph) ExecuteQuery(query *Query) (*QueryResult, error) {

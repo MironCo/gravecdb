@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/MironCo/gravecdb/embedding"
 	"github.com/MironCo/gravecdb/graph"
 )
 
@@ -13,7 +14,7 @@ func main() {
 
 	// Create database and embedder
 	db := graph.NewGraph()
-	embedder := graph.NewOllamaEmbedder()
+	embedder := embedding.NewOllamaEmbedder()
 
 	fmt.Println("Using Ollama embedder with nomic-embed-text model")
 	fmt.Println()

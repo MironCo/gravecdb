@@ -1,4 +1,4 @@
-package graph
+package embedding
 
 import (
 	"math"
@@ -64,20 +64,20 @@ func CosineDistance(a, b []float32) float32 {
 	return 1.0 - CosineSimilarity(a, b)
 }
 
-// EmbeddingStore manages versioned embeddings for nodes
-type EmbeddingStore struct {
+// Store manages versioned embeddings for nodes
+type Store struct {
 	embeddings map[string][]*Embedding // nodeID -> list of embedding versions
 }
 
-// NewEmbeddingStore creates a new embedding store
-func NewEmbeddingStore() *EmbeddingStore {
-	return &EmbeddingStore{
+// NewStore creates a new embedding store
+func NewStore() *Store {
+	return &Store{
 		embeddings: make(map[string][]*Embedding),
 	}
 }
 
 // Add stores a new embedding for a node, closing out any previous embedding
-func (s *EmbeddingStore) Add(nodeID string, vector []float32, model string, propertySnapshot map[string]interface{}) *Embedding {
+func (s *Store) Add(nodeID string, vector []float32, model string, propertySnapshot map[string]interface{}) *Embedding {
 	now := time.Now()
 
 	// Close out the current embedding if one exists
@@ -100,7 +100,7 @@ func (s *EmbeddingStore) Add(nodeID string, vector []float32, model string, prop
 }
 
 // GetCurrent returns the currently valid embedding for a node
-func (s *EmbeddingStore) GetCurrent(nodeID string) *Embedding {
+func (s *Store) GetCurrent(nodeID string) *Embedding {
 	versions := s.embeddings[nodeID]
 	for i := len(versions) - 1; i >= 0; i-- {
 		if versions[i].ValidTo == nil {
@@ -111,7 +111,7 @@ func (s *EmbeddingStore) GetCurrent(nodeID string) *Embedding {
 }
 
 // GetAt returns the embedding that was valid at a specific time
-func (s *EmbeddingStore) GetAt(nodeID string, t time.Time) *Embedding {
+func (s *Store) GetAt(nodeID string, t time.Time) *Embedding {
 	versions := s.embeddings[nodeID]
 	for i := len(versions) - 1; i >= 0; i-- {
 		if versions[i].IsValidAt(t) {
@@ -122,7 +122,7 @@ func (s *EmbeddingStore) GetAt(nodeID string, t time.Time) *Embedding {
 }
 
 // GetAll returns all embedding versions for a node
-func (s *EmbeddingStore) GetAll(nodeID string) []*Embedding {
+func (s *Store) GetAll(nodeID string) []*Embedding {
 	return s.embeddings[nodeID]
 }
 
@@ -144,7 +144,7 @@ type VersionedSearchResult struct {
 }
 
 // Search finds the k most similar nodes to a query vector at a specific time
-func (s *EmbeddingStore) Search(query []float32, k int, asOf time.Time, validNodeIDs map[string]bool) []SearchResult {
+func (s *Store) Search(query []float32, k int, asOf time.Time, validNodeIDs map[string]bool) []SearchResult {
 	var results []SearchResult
 
 	for nodeID, versions := range s.embeddings {
@@ -192,7 +192,7 @@ func (s *EmbeddingStore) Search(query []float32, k int, asOf time.Time, validNod
 
 // SearchAllVersions finds all historical versions of nodes similar to a query vector
 // Returns all embeddings (across all time periods) that match, with their temporal validity
-func (s *EmbeddingStore) SearchAllVersions(query []float32, k int, validNodeIDs map[string]bool, threshold float32, calculateDrift bool) []VersionedSearchResult {
+func (s *Store) SearchAllVersions(query []float32, k int, validNodeIDs map[string]bool, threshold float32, calculateDrift bool) []VersionedSearchResult {
 	var results []VersionedSearchResult
 
 	// Group results by nodeID for drift calculation

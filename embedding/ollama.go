@@ -1,4 +1,4 @@
-package graph
+package embedding
 
 import (
 	"bytes"
@@ -101,14 +101,4 @@ func (e *OllamaEmbedder) Embed(text string) ([]float32, error) {
 // Model returns the model name being used
 func (e *OllamaEmbedder) Model() string {
 	return e.model
-}
-
-// EmbedAndStore generates an embedding for text and stores it on a node
-func (e *OllamaEmbedder) EmbedAndStore(g *Graph, nodeID string, text string) error {
-	vector, err := e.Embed(text)
-	if err != nil {
-		return fmt.Errorf("failed to generate embedding: %w", err)
-	}
-
-	return g.SetNodeEmbedding(nodeID, vector, e.model)
 }

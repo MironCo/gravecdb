@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MironCo/gravecdb/bolt"
+	"github.com/MironCo/gravecdb/embedding"
 	"github.com/MironCo/gravecdb/graph"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -16,7 +17,7 @@ import (
 // Global graph instance
 var db graph.GraphDB
 var serverConfig *graph.ServerConfig
-var embedder graph.Embedder
+var embedder embedding.Embedder
 
 func main() {
 	// Load .env file if present (silently ignore if not found)

@@ -4,7 +4,14 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/MironCo/gravecdb/embedding"
 )
+
+// Type aliases for embedding types
+type Embedding = embedding.Embedding
+type SearchResult = embedding.SearchResult
+type VersionedSearchResult = embedding.VersionedSearchResult
 
 // Graph represents the in-memory graph database with optional disk persistence
 type Graph struct {
@@ -13,7 +20,7 @@ type Graph struct {
 	relationships      map[string]*Relationship
 	relationshipVersions map[string][]*Relationship // All versions of each relationship for temporal queries
 	nodesByLabel       map[string]map[string]*Node // label -> nodeID -> Node
-	embeddings         *EmbeddingStore             // Vector embeddings for semantic search
+	embeddings         *embedding.Store            // Vector embeddings for semantic search
 	mu                 sync.RWMutex
 	wal                *WAL       // Write-Ahead Log for persistence (nil if persistence disabled)
 	boltStore          *BoltStore // bbolt storage backend (nil if using WAL or no persistence)
@@ -27,7 +34,7 @@ func NewGraph() *Graph {
 		relationships:        make(map[string]*Relationship),
 		relationshipVersions: make(map[string][]*Relationship),
 		nodesByLabel:         make(map[string]map[string]*Node),
-		embeddings:           NewEmbeddingStore(),
+		embeddings:           embedding.NewStore(),
 	}
 }
 
@@ -48,7 +55,7 @@ func NewGraphWithPersistence(dataDir string) (*Graph, error) {
 		relationships:        make(map[string]*Relationship),
 		relationshipVersions: make(map[string][]*Relationship),
 		nodesByLabel:         make(map[string]map[string]*Node),
-		embeddings:           NewEmbeddingStore(),
+		embeddings:           embedding.NewStore(),
 		wal:                  wal,
 	}
 
@@ -77,7 +84,7 @@ func NewGraphWithMaxDurability(dataDir string) (*Graph, error) {
 		relationships:        make(map[string]*Relationship),
 		relationshipVersions: make(map[string][]*Relationship),
 		nodesByLabel:         make(map[string]map[string]*Node),
-		embeddings:           NewEmbeddingStore(),
+		embeddings:           embedding.NewStore(),
 		wal:                  wal,
 	}
 
@@ -106,7 +113,7 @@ func NewGraphWithMaxPerformance(dataDir string) (*Graph, error) {
 		relationships:        make(map[string]*Relationship),
 		relationshipVersions: make(map[string][]*Relationship),
 		nodesByLabel:         make(map[string]map[string]*Node),
-		embeddings:           NewEmbeddingStore(),
+		embeddings:           embedding.NewStore(),
 		wal:                  wal,
 	}
 
@@ -133,7 +140,7 @@ func NewGraphWithBolt(dataDir string) (*Graph, error) {
 		relationships:        make(map[string]*Relationship),
 		relationshipVersions: make(map[string][]*Relationship),
 		nodesByLabel:         make(map[string]map[string]*Node),
-		embeddings:           NewEmbeddingStore(),
+		embeddings:           embedding.NewStore(),
 		boltStore:            store,
 	}
 

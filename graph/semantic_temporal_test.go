@@ -3,13 +3,15 @@ package graph
 import (
 	"testing"
 	"time"
+
+	"github.com/MironCo/gravecdb/embedding"
 )
 
 // TestSemanticSearchThroughTime tests the THROUGH TIME syntax for semantic search
 func TestSemanticSearchThroughTime(t *testing.T) {
 	// Create database and mock embedder
 	db := NewGraph()
-	embedder := NewMockEmbedder()
+	embedder := embedding.NewMockEmbedder()
 
 	// Create a person whose role evolves over time
 	alice := db.CreateNode("Person")
@@ -236,7 +238,7 @@ func TestSemanticSearchThroughTime(t *testing.T) {
 // TestSemanticSearchThroughTimeWithLimit tests LIMIT with THROUGH TIME
 func TestSemanticSearchThroughTimeWithLimit(t *testing.T) {
 	db := NewGraph()
-	embedder := NewMockEmbedder()
+	embedder := embedding.NewMockEmbedder()
 
 	// Create a person with multiple role changes
 	alice := db.CreateNode("Person")
@@ -280,7 +282,7 @@ func TestSemanticSearchThroughTimeWithLimit(t *testing.T) {
 // TestPropertySnapshotInThroughTime verifies that historical property values are preserved
 func TestPropertySnapshotInThroughTime(t *testing.T) {
 	db := NewGraph()
-	embedder := NewMockEmbedder()
+	embedder := embedding.NewMockEmbedder()
 
 	// Create a person with properties that change
 	alice := db.CreateNode("Person")

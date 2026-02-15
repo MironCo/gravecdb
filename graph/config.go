@@ -5,6 +5,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/MironCo/gravecdb/embedding"
 )
 
 // Config holds configuration for creating a graph database connection
@@ -154,7 +156,7 @@ func (cfg *Config) GetEmbedder() (Embedder, error) {
 	if cfg.EmbedderURL == "" {
 		return nil, nil
 	}
-	return NewEmbedderFromURL(cfg.EmbedderURL)
+	return embedding.NewFromURL(cfg.EmbedderURL)
 }
 
 // ServerConfig holds configuration for the HTTP server

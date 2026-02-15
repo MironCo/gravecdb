@@ -1,4 +1,4 @@
-package graph
+package embedding
 
 import (
 	"fmt"
@@ -6,16 +6,16 @@ import (
 	"strings"
 )
 
-// EmbedderConfig holds configuration for creating an embedder
-type EmbedderConfig struct {
+// Config holds configuration for creating an embedder
+type Config struct {
 	Provider string // "ollama", "openai"
 	Model    string // model name (optional, uses defaults)
 	BaseURL  string // API base URL (optional, uses defaults)
 	APIKey   string // API key (for openai)
 }
 
-// NewEmbedderFromConfig creates an embedder from config
-func NewEmbedderFromConfig(cfg EmbedderConfig) (Embedder, error) {
+// NewFromConfig creates an embedder from config
+func NewFromConfig(cfg Config) (Embedder, error) {
 	switch strings.ToLower(cfg.Provider) {
 	case "ollama":
 		return NewOllamaEmbedderWithConfig(cfg.BaseURL, cfg.Model), nil
@@ -33,7 +33,7 @@ func NewEmbedderFromConfig(cfg EmbedderConfig) (Embedder, error) {
 	}
 }
 
-// NewEmbedderFromURL creates an embedder from a connection string
+// NewFromURL creates an embedder from a connection string
 // Format: provider://[apikey@]host[:port][/model]
 //
 // Examples:
@@ -43,7 +43,7 @@ func NewEmbedderFromConfig(cfg EmbedderConfig) (Embedder, error) {
 //	ollama://                                    (uses defaults)
 //	openai://                                    (uses OPENAI_API_KEY env var)
 //	openai://sk-xxx@api.openai.com/text-embedding-3-large
-func NewEmbedderFromURL(url string) (Embedder, error) {
+func NewFromURL(url string) (Embedder, error) {
 	// Parse provider
 	parts := strings.SplitN(url, "://", 2)
 	if len(parts) != 2 {
@@ -53,7 +53,7 @@ func NewEmbedderFromURL(url string) (Embedder, error) {
 	provider := strings.ToLower(parts[0])
 	rest := parts[1]
 
-	cfg := EmbedderConfig{Provider: provider}
+	cfg := Config{Provider: provider}
 
 	// Parse apikey@host/model
 	if strings.Contains(rest, "@") {
@@ -85,14 +85,14 @@ func NewEmbedderFromURL(url string) (Embedder, error) {
 		}
 	}
 
-	return NewEmbedderFromConfig(cfg)
+	return NewFromConfig(cfg)
 }
 
-// DefaultEmbedder returns the default embedder based on environment
+// Default returns the default embedder based on environment
 // Checks EMBEDDER_URL env var first, then falls back to Ollama localhost
-func DefaultEmbedder() (Embedder, error) {
+func Default() (Embedder, error) {
 	if url := os.Getenv("EMBEDDER_URL"); url != "" {
-		return NewEmbedderFromURL(url)
+		return NewFromURL(url)
 	}
 
 	// Default to local Ollama

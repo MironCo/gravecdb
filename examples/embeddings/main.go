@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/MironCo/gravecdb/embedding"
 	"github.com/MironCo/gravecdb/graph"
 )
 
@@ -61,23 +62,23 @@ func main() {
 	fmt.Println("\n=== Demo Complete ===")
 }
 
-func getEmbedder() (graph.Embedder, error) {
+func getEmbedder() (embedding.Embedder, error) {
 	// Try to get embedder from DSN or environment
-	embedder, err := graph.DefaultEmbedder()
+	embedder, err := embedding.Default()
 	if err == nil {
 		return embedder, nil
 	}
 
 	// Fall back to default Ollama
-	return graph.NewOllamaEmbedder(), nil
+	return embedding.NewOllamaEmbedder(), nil
 }
 
-func printEmbedderInfo(embedder graph.Embedder) {
+func printEmbedderInfo(embedder embedding.Embedder) {
 	switch e := embedder.(type) {
-	case *graph.OllamaEmbedder:
+	case *embedding.OllamaEmbedder:
 		fmt.Printf("Using Ollama embedder\n")
 		fmt.Printf("  Model: %s\n", e.Model())
-	case *graph.OpenAIEmbedder:
+	case *embedding.OpenAIEmbedder:
 		fmt.Printf("Using OpenAI embedder\n")
 		fmt.Printf("  Model: %s\n", e.Model())
 	default:
@@ -107,7 +108,7 @@ func createPeople(db *graph.Graph) {
 	}
 }
 
-func runQuery(db *graph.Graph, embedder graph.Embedder, queryStr string, description string) {
+func runQuery(db *graph.Graph, embedder embedding.Embedder, queryStr string, description string) {
 	fmt.Printf("\nQuery: %s\n", description)
 	fmt.Printf("  %s\n", queryStr)
 
