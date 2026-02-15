@@ -22,6 +22,7 @@ type GraphQuery struct {
 	QueryType       string
 	MatchPattern    *GraphMatchPattern
 	CreateClause    *GraphCreateClause
+	MergeClause     *GraphMergeClause
 	SetClause       *GraphSetClause
 	DeleteClause    *GraphDeleteClause
 	WhereClause     *GraphWhereClause
@@ -148,6 +149,12 @@ type GraphSimilarToClause struct {
 	DriftMode   bool
 }
 
+type GraphMergeClause struct {
+	Pattern      *GraphMatchPattern
+	OnCreateSets []GraphPropertyUpdate
+	OnMatchSets  []GraphPropertyUpdate
+}
+
 // ConvertToGraphQuery converts the AST to graph-compatible query
 func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
 	gq := &GraphQuery{}
@@ -214,10 +221,68 @@ func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
 		case *SimilarToClause:
 			stc := convertSimilarToGraph(c)
 			gq.SimilarToClause = stc
+
+		case *MergeClause:
+			mc, err := convertMergeToGraph(c)
+			if err != nil {
+				return nil, err
+			}
+			if gq.QueryType == "" {
+				gq.QueryType = "MERGE"
+			}
+			gq.MergeClause = mc
 		}
 	}
 
 	return gq, nil
+}
+
+func convertMergeToGraph(m *MergeClause) (*GraphMergeClause, error) {
+	gm := &GraphMergeClause{
+		OnCreateSets: []GraphPropertyUpdate{},
+		OnMatchSets:  []GraphPropertyUpdate{},
+	}
+
+	// Convert pattern
+	if m.Pattern != nil {
+		pattern, err := convertPatternToGraph(m.Pattern)
+		if err != nil {
+			return nil, err
+		}
+		gm.Pattern = pattern
+	}
+
+	// Convert ON CREATE SET expressions
+	for _, expr := range m.OnCreate {
+		if setItem, ok := expr.(*SetItem); ok {
+			update := GraphPropertyUpdate{}
+			if setItem.Property != nil {
+				if ident, ok := setItem.Property.Object.(*Identifier); ok {
+					update.Variable = ident.Name
+				}
+				update.Property = setItem.Property.Property
+			}
+			update.Value = extractExprValue(setItem.Expression)
+			gm.OnCreateSets = append(gm.OnCreateSets, update)
+		}
+	}
+
+	// Convert ON MATCH SET expressions
+	for _, expr := range m.OnMatch {
+		if setItem, ok := expr.(*SetItem); ok {
+			update := GraphPropertyUpdate{}
+			if setItem.Property != nil {
+				if ident, ok := setItem.Property.Object.(*Identifier); ok {
+					update.Variable = ident.Name
+				}
+				update.Property = setItem.Property.Property
+			}
+			update.Value = extractExprValue(setItem.Expression)
+			gm.OnMatchSets = append(gm.OnMatchSets, update)
+		}
+	}
+
+	return gm, nil
 }
 
 func convertPatternToGraph(p *Pattern) (*GraphMatchPattern, error) {

@@ -202,6 +202,42 @@ def test_complex_patterns(session):
              "MATCH (p:Person) RETURN p")
 
 
+def test_merge_operations(session):
+    """Test MERGE operations."""
+    print("\n" + "=" * 60)
+    print("MERGE OPERATIONS")
+    print("=" * 60)
+
+    # MERGE should create if not exists
+    run_test(session, "MERGE create new node",
+             "MERGE (p:Person {name: 'MergeTest'})",
+             expect_results=False)
+
+    # Verify it was created
+    records = run_test(session, "Verify MERGE created node",
+                       "MATCH (p:Person {name: 'MergeTest'}) RETURN p.name")
+    if records and len(records) == 1:
+        print("  ✓ MERGE created node successfully")
+
+    # MERGE again should not create duplicate
+    run_test(session, "MERGE existing node (should not duplicate)",
+             "MERGE (p:Person {name: 'MergeTest'})",
+             expect_results=False)
+
+    # Verify still only one
+    records = run_test(session, "Verify no duplicate",
+                       "MATCH (p:Person {name: 'MergeTest'}) RETURN p.name")
+    if records and len(records) == 1:
+        print("  ✓ MERGE did not create duplicate")
+    elif records and len(records) > 1:
+        print(f"  ✗ MERGE created duplicate! Found {len(records)} nodes")
+
+    # Cleanup
+    run_test(session, "Delete MergeTest node",
+             "MATCH (p:Person {name: 'MergeTest'}) DELETE p",
+             expect_results=False)
+
+
 def cleanup(session):
     """Clean up test data."""
     print("\n" + "=" * 60)
@@ -256,6 +292,7 @@ def main():
         test_transactions(session, driver)
         test_delete_operations(session)
         test_complex_patterns(session)
+        test_merge_operations(session)
 
         # Cleanup
         cleanup(session)

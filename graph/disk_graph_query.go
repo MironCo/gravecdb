@@ -13,6 +13,8 @@ func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*
 	switch query.QueryType {
 	case "CREATE":
 		return g.executeCreateQuery(query)
+	case "MERGE":
+		return g.executeMergeQuery(query)
 	case "MATCH":
 		// Check if this is a mutating MATCH query
 		if query.CreateClause != nil {
@@ -603,6 +605,149 @@ func toFloat64(v interface{}) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// executeMergeQuery handles MERGE queries (match or create pattern)
+func (g *DiskGraph) executeMergeQuery(query *Query) (*QueryResult, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	mc := query.MergeClause
+	if mc == nil || mc.Pattern == nil {
+		return nil, fmt.Errorf("MERGE requires a pattern")
+	}
+
+	// Try to find existing matches for the pattern
+	matches := g.findMatchesUnlocked(mc.Pattern, query.WhereClause)
+
+	mergedCount := 0
+	createdCount := 0
+	var resultVars map[string]interface{}
+
+	if len(matches) > 0 {
+		// Pattern exists - apply ON MATCH SET if specified
+		for _, match := range matches {
+			for _, update := range mc.OnMatchSets {
+				entity, ok := match[update.Variable]
+				if !ok {
+					continue
+				}
+				if node, ok := entity.(*Node); ok {
+					g.setNodePropertyUnlocked(node.ID, update.Property, update.Value)
+				} else if rel, ok := entity.(*Relationship); ok {
+					g.setRelPropertyUnlocked(rel.ID, update.Property, update.Value)
+				}
+			}
+			mergedCount++
+			resultVars = match // Keep last match for RETURN
+		}
+	} else {
+		// Pattern does not exist - create it and apply ON CREATE SET
+		resultVars = make(map[string]interface{})
+
+		// Create nodes from pattern
+		for _, nodePattern := range mc.Pattern.Nodes {
+			node := g.createNodeUnlocked(nodePattern.Labels...)
+
+			// Set inline properties from pattern
+			for key, value := range nodePattern.Properties {
+				g.setNodePropertyUnlocked(node.ID, key, value)
+			}
+
+			if nodePattern.Variable != "" {
+				resultVars[nodePattern.Variable] = node
+			}
+			createdCount++
+		}
+
+		// Create relationships from pattern
+		for _, relPattern := range mc.Pattern.Relationships {
+			if relPattern.FromIndex >= len(mc.Pattern.Nodes) || relPattern.ToIndex >= len(mc.Pattern.Nodes) {
+				continue
+			}
+
+			fromVar := mc.Pattern.Nodes[relPattern.FromIndex].Variable
+			toVar := mc.Pattern.Nodes[relPattern.ToIndex].Variable
+
+			var fromNode, toNode *Node
+			if e, ok := resultVars[fromVar]; ok {
+				fromNode, _ = e.(*Node)
+			}
+			if e, ok := resultVars[toVar]; ok {
+				toNode, _ = e.(*Node)
+			}
+
+			if fromNode == nil || toNode == nil {
+				continue
+			}
+
+			relType := ""
+			if len(relPattern.Types) > 0 {
+				relType = relPattern.Types[0]
+			}
+
+			rel, err := g.createRelationshipUnlocked(relType, fromNode.ID, toNode.ID)
+			if err != nil {
+				continue
+			}
+
+			if relPattern.Variable != "" {
+				resultVars[relPattern.Variable] = rel
+			}
+			createdCount++
+		}
+
+		// Apply ON CREATE SET
+		for _, update := range mc.OnCreateSets {
+			entity, ok := resultVars[update.Variable]
+			if !ok {
+				continue
+			}
+			if node, ok := entity.(*Node); ok {
+				g.setNodePropertyUnlocked(node.ID, update.Property, update.Value)
+			} else if rel, ok := entity.(*Relationship); ok {
+				g.setRelPropertyUnlocked(rel.ID, update.Property, update.Value)
+			}
+		}
+	}
+
+	// Build result
+	result := &QueryResult{
+		Columns: []string{},
+		Rows:    []map[string]interface{}{},
+	}
+
+	if query.ReturnClause != nil && resultVars != nil {
+		row := map[string]interface{}{}
+		for _, item := range query.ReturnClause.Items {
+			colName := item.Variable
+			if item.Property != "" {
+				colName = item.Variable + "." + item.Property
+			}
+			result.Columns = append(result.Columns, colName)
+
+			if val, ok := resultVars[item.Variable]; ok {
+				if item.Property != "" {
+					if node, ok := val.(*Node); ok {
+						row[colName] = node.Properties[item.Property]
+					} else if rel, ok := val.(*Relationship); ok {
+						row[colName] = rel.Properties[item.Property]
+					}
+				} else {
+					row[colName] = val
+				}
+			}
+		}
+		result.Rows = append(result.Rows, row)
+	} else {
+		result.Columns = []string{"merged", "created"}
+		result.Rows = append(result.Rows, map[string]interface{}{
+			"merged":  mergedCount,
+			"created": createdCount,
+		})
+	}
+
+	return result, nil
 }
 
 // executeEmbedQuery handles MATCH...EMBED queries and persists embeddings to disk

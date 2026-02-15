@@ -42,7 +42,7 @@ GravecDB implements the Neo4j Bolt protocol (v4.4), allowing connections from st
 | Clause | Status | Notes |
 |--------|--------|-------|
 | OPTIONAL MATCH | ⚠️ | Parsed, may not behave correctly |
-| MERGE | ❌ | Parsed but not implemented |
+| MERGE | ✅ | Match or create pattern |
 | WITH | ⚠️ | Basic support |
 | UNWIND | ❌ | Parsed but not implemented |
 | REMOVE | ❌ | Parsed but not implemented |
@@ -108,7 +108,7 @@ GravecDB implements the Neo4j Bolt protocol (v4.4), allowing connections from st
 
 ### High Priority
 - [x] ~~Fix SET clause to work with following clauses (RETURN, etc.)~~
-- [ ] Implement MERGE clause
+- [x] ~~Implement MERGE clause~~
 - [ ] Add variable-length path support `[*1..5]`
 - [ ] Implement Path data type for Bolt responses
 
