@@ -8,22 +8,26 @@ import (
 
 // Graph represents the in-memory graph database with optional disk persistence
 type Graph struct {
-	nodes         map[string]*Node
-	relationships map[string]*Relationship
-	nodesByLabel  map[string]map[string]*Node // label -> nodeID -> Node
-	embeddings    *EmbeddingStore             // Vector embeddings for semantic search
-	mu            sync.RWMutex
-	wal           *WAL       // Write-Ahead Log for persistence (nil if persistence disabled)
-	boltStore     *BoltStore // bbolt storage backend (nil if using WAL or no persistence)
+	nodes              map[string]*Node
+	nodeVersions       map[string][]*Node          // All versions of each node for temporal queries
+	relationships      map[string]*Relationship
+	relationshipVersions map[string][]*Relationship // All versions of each relationship for temporal queries
+	nodesByLabel       map[string]map[string]*Node // label -> nodeID -> Node
+	embeddings         *EmbeddingStore             // Vector embeddings for semantic search
+	mu                 sync.RWMutex
+	wal                *WAL       // Write-Ahead Log for persistence (nil if persistence disabled)
+	boltStore          *BoltStore // bbolt storage backend (nil if using WAL or no persistence)
 }
 
 // NewGraph creates a new graph database instance without persistence
 func NewGraph() *Graph {
 	return &Graph{
-		nodes:         make(map[string]*Node),
-		relationships: make(map[string]*Relationship),
-		nodesByLabel:  make(map[string]map[string]*Node),
-		embeddings:    NewEmbeddingStore(),
+		nodes:                make(map[string]*Node),
+		nodeVersions:         make(map[string][]*Node),
+		relationships:        make(map[string]*Relationship),
+		relationshipVersions: make(map[string][]*Relationship),
+		nodesByLabel:         make(map[string]map[string]*Node),
+		embeddings:           NewEmbeddingStore(),
 	}
 }
 
@@ -39,11 +43,13 @@ func NewGraphWithPersistence(dataDir string) (*Graph, error) {
 	}
 
 	g := &Graph{
-		nodes:         make(map[string]*Node),
-		relationships: make(map[string]*Relationship),
-		nodesByLabel:  make(map[string]map[string]*Node),
-		embeddings:    NewEmbeddingStore(),
-		wal:           wal,
+		nodes:                make(map[string]*Node),
+		nodeVersions:         make(map[string][]*Node),
+		relationships:        make(map[string]*Relationship),
+		relationshipVersions: make(map[string][]*Relationship),
+		nodesByLabel:         make(map[string]map[string]*Node),
+		embeddings:           NewEmbeddingStore(),
+		wal:                  wal,
 	}
 
 	// Attempt to recover from disk
@@ -66,11 +72,13 @@ func NewGraphWithMaxDurability(dataDir string) (*Graph, error) {
 	}
 
 	g := &Graph{
-		nodes:         make(map[string]*Node),
-		relationships: make(map[string]*Relationship),
-		nodesByLabel:  make(map[string]map[string]*Node),
-		embeddings:    NewEmbeddingStore(),
-		wal:           wal,
+		nodes:                make(map[string]*Node),
+		nodeVersions:         make(map[string][]*Node),
+		relationships:        make(map[string]*Relationship),
+		relationshipVersions: make(map[string][]*Relationship),
+		nodesByLabel:         make(map[string]map[string]*Node),
+		embeddings:           NewEmbeddingStore(),
+		wal:                  wal,
 	}
 
 	if err := g.recover(); err != nil {
@@ -93,11 +101,13 @@ func NewGraphWithMaxPerformance(dataDir string) (*Graph, error) {
 	}
 
 	g := &Graph{
-		nodes:         make(map[string]*Node),
-		relationships: make(map[string]*Relationship),
-		nodesByLabel:  make(map[string]map[string]*Node),
-		embeddings:    NewEmbeddingStore(),
-		wal:           wal,
+		nodes:                make(map[string]*Node),
+		nodeVersions:         make(map[string][]*Node),
+		relationships:        make(map[string]*Relationship),
+		relationshipVersions: make(map[string][]*Relationship),
+		nodesByLabel:         make(map[string]map[string]*Node),
+		embeddings:           NewEmbeddingStore(),
+		wal:                  wal,
 	}
 
 	if err := g.recover(); err != nil {
@@ -118,11 +128,13 @@ func NewGraphWithBolt(dataDir string) (*Graph, error) {
 	}
 
 	g := &Graph{
-		nodes:         make(map[string]*Node),
-		relationships: make(map[string]*Relationship),
-		nodesByLabel:  make(map[string]map[string]*Node),
-		embeddings:    NewEmbeddingStore(),
-		boltStore:     store,
+		nodes:                make(map[string]*Node),
+		nodeVersions:         make(map[string][]*Node),
+		relationships:        make(map[string]*Relationship),
+		relationshipVersions: make(map[string][]*Relationship),
+		nodesByLabel:         make(map[string]map[string]*Node),
+		embeddings:           NewEmbeddingStore(),
+		boltStore:            store,
 	}
 
 	// Load existing data from bbolt into memory
@@ -399,6 +411,9 @@ func (g *Graph) createNodeUnlocked(labels ...string) *Node {
 	// Apply the operation to the in-memory graph
 	g.nodes[node.ID] = node
 
+	// Add to version history
+	g.nodeVersions[node.ID] = append(g.nodeVersions[node.ID], node)
+
 	// Index by labels for fast lookup
 	for _, label := range labels {
 		if g.nodesByLabel[label] == nil {
@@ -412,6 +427,7 @@ func (g *Graph) createNodeUnlocked(labels ...string) *Node {
 		if err := g.boltStore.SaveNode(node); err != nil {
 			// Rollback in-memory changes on persistence failure
 			delete(g.nodes, node.ID)
+			g.nodeVersions[node.ID] = g.nodeVersions[node.ID][:len(g.nodeVersions[node.ID])-1]
 			for _, label := range labels {
 				delete(g.nodesByLabel[label], node.ID)
 			}
@@ -481,11 +497,15 @@ func (g *Graph) createRelationshipUnlocked(relType string, fromNodeID, toNodeID 
 	// Apply the operation to the in-memory graph
 	g.relationships[rel.ID] = rel
 
+	// Add to version history
+	g.relationshipVersions[rel.ID] = append(g.relationshipVersions[rel.ID], rel)
+
 	// Persist to bbolt if enabled
 	if g.boltStore != nil {
 		if err := g.boltStore.SaveRelationship(rel); err != nil {
 			// Rollback in-memory changes
 			delete(g.relationships, rel.ID)
+			g.relationshipVersions[rel.ID] = g.relationshipVersions[rel.ID][:len(g.relationshipVersions[rel.ID])-1]
 			return nil, fmt.Errorf("failed to persist relationship to bbolt: %w", err)
 		}
 	}
@@ -683,11 +703,39 @@ func (g *Graph) SetNodeProperty(nodeID, key string, value interface{}) error {
 
 // setNodePropertyUnlocked sets a property without acquiring a lock (internal use)
 // Caller must already hold g.mu.Lock()
+// Creates a new version of the node to preserve temporal history
 func (g *Graph) setNodePropertyUnlocked(nodeID, key string, value interface{}) error {
-	node, exists := g.nodes[nodeID]
+	currentNode, exists := g.nodes[nodeID]
 	if !exists {
 		return fmt.Errorf("node with ID %s not found", nodeID)
 	}
+
+	// Check if value is actually changing
+	if currentVal, exists := currentNode.Properties[key]; exists && currentVal == value {
+		return nil // No change needed
+	}
+
+	now := time.Now()
+
+	// Close out the current version
+	currentNode.ValidTo = &now
+
+	// Create a new version with copied properties
+	newNode := &Node{
+		ID:         currentNode.ID,
+		Labels:     currentNode.Labels, // Labels array is not modified, safe to share reference
+		Properties: make(map[string]interface{}),
+		ValidFrom:  now,
+		ValidTo:    nil, // Currently valid
+	}
+
+	// Deep copy properties
+	for k, v := range currentNode.Properties {
+		newNode.Properties[k] = v
+	}
+
+	// Apply the new value
+	newNode.Properties[key] = value
 
 	// Log the operation to the WAL
 	if g.wal != nil {
@@ -700,18 +748,33 @@ func (g *Graph) setNodePropertyUnlocked(nodeID, key string, value interface{}) e
 			},
 		}
 		if err := g.wal.WriteOperation(op); err != nil {
+			// Rollback the version change
+			currentNode.ValidTo = nil
 			return fmt.Errorf("failed to write operation to WAL: %w", err)
 		}
 	}
 
-	// Apply the operation to the in-memory node
-	node.Properties[key] = value
+	// Update the current node pointer
+	g.nodes[nodeID] = newNode
+
+	// Add to version history
+	g.nodeVersions[nodeID] = append(g.nodeVersions[nodeID], newNode)
+
+	// Update label index
+	for _, label := range newNode.Labels {
+		g.nodesByLabel[label][nodeID] = newNode
+	}
 
 	// Persist to bbolt if enabled
 	if g.boltStore != nil {
-		if err := g.boltStore.SaveNode(node); err != nil {
-			// Rollback the property change
-			delete(node.Properties, key)
+		if err := g.boltStore.SaveNode(newNode); err != nil {
+			// Rollback changes
+			currentNode.ValidTo = nil
+			g.nodes[nodeID] = currentNode
+			g.nodeVersions[nodeID] = g.nodeVersions[nodeID][:len(g.nodeVersions[nodeID])-1]
+			for _, label := range newNode.Labels {
+				g.nodesByLabel[label][nodeID] = currentNode
+			}
 			return fmt.Errorf("failed to persist node property to bbolt: %w", err)
 		}
 	}
@@ -731,10 +794,39 @@ func (g *Graph) SetRelationshipProperty(relID, key string, value interface{}) er
 // setRelationshipPropertyUnlocked sets a relationship property without acquiring a lock (internal use)
 // Caller must already hold g.mu.Lock()
 func (g *Graph) setRelationshipPropertyUnlocked(relID, key string, value interface{}) error {
-	rel, exists := g.relationships[relID]
+	currentRel, exists := g.relationships[relID]
 	if !exists {
 		return fmt.Errorf("relationship with ID %s not found", relID)
 	}
+
+	// Check if value is actually changing
+	if currentVal, exists := currentRel.Properties[key]; exists && currentVal == value {
+		return nil // No change needed
+	}
+
+	now := time.Now()
+
+	// Close out the current version
+	currentRel.ValidTo = &now
+
+	// Create a new version with copied properties
+	newRel := &Relationship{
+		ID:         currentRel.ID,
+		Type:       currentRel.Type,
+		FromNodeID: currentRel.FromNodeID,
+		ToNodeID:   currentRel.ToNodeID,
+		Properties: make(map[string]interface{}),
+		ValidFrom:  now,
+		ValidTo:    nil, // Currently valid
+	}
+
+	// Deep copy properties
+	for k, v := range currentRel.Properties {
+		newRel.Properties[k] = v
+	}
+
+	// Apply the new value
+	newRel.Properties[key] = value
 
 	// Log the operation to the WAL
 	if g.wal != nil {
@@ -747,18 +839,25 @@ func (g *Graph) setRelationshipPropertyUnlocked(relID, key string, value interfa
 			},
 		}
 		if err := g.wal.WriteOperation(op); err != nil {
+			// Rollback the version change
+			currentRel.ValidTo = nil
 			return fmt.Errorf("failed to write operation to WAL: %w", err)
 		}
 	}
 
-	// Apply the operation to the in-memory relationship
-	rel.Properties[key] = value
+	// Update the current relationship pointer
+	g.relationships[relID] = newRel
+
+	// Add to version history
+	g.relationshipVersions[relID] = append(g.relationshipVersions[relID], newRel)
 
 	// Persist to bbolt if enabled
 	if g.boltStore != nil {
-		if err := g.boltStore.SaveRelationship(rel); err != nil {
-			// Rollback the property change
-			delete(rel.Properties, key)
+		if err := g.boltStore.SaveRelationship(newRel); err != nil {
+			// Rollback changes
+			currentRel.ValidTo = nil
+			g.relationships[relID] = currentRel
+			g.relationshipVersions[relID] = g.relationshipVersions[relID][:len(g.relationshipVersions[relID])-1]
 			return fmt.Errorf("failed to persist relationship property to bbolt: %w", err)
 		}
 	}

@@ -1,6 +1,9 @@
 package graph
 
-import "time"
+import (
+	"sort"
+	"time"
+)
 
 // TemporalView represents a view of the graph at a specific point in time
 // This allows querying the graph as it existed at any historical moment
@@ -25,21 +28,12 @@ func (g *Graph) AsOf(t time.Time) *TemporalView {
 }
 
 // GetNode retrieves a node by ID if it was valid at the temporal view's time
+// Uses binary search on the version history for O(log n) lookup
 func (tv *TemporalView) GetNode(id string) (*Node, error) {
 	tv.graph.mu.RLock()
 	defer tv.graph.mu.RUnlock()
 
-	node, exists := tv.graph.nodes[id]
-	if !exists {
-		return nil, nil // Node never existed
-	}
-
-	// Check if the node was valid at the query time
-	if !node.IsValidAt(tv.asOf) {
-		return nil, nil // Node existed but wasn't valid at this time
-	}
-
-	return node, nil
+	return tv.getNodeAtTime(id)
 }
 
 // GetNodesByLabel retrieves all nodes with a specific label that were valid at the temporal view's time
@@ -49,14 +43,39 @@ func (tv *TemporalView) GetNodesByLabel(label string) []*Node {
 
 	nodes := []*Node{}
 	if nodeMap, exists := tv.graph.nodesByLabel[label]; exists {
-		for _, node := range nodeMap {
-			// Only include nodes that were valid at the query time
-			if node.IsValidAt(tv.asOf) {
+		// For each unique node ID, find the version valid at tv.asOf
+		for nodeID := range nodeMap {
+			if node, _ := tv.getNodeAtTime(nodeID); node != nil {
 				nodes = append(nodes, node)
 			}
 		}
 	}
 	return nodes
+}
+
+// getNodeAtTime is a helper that finds the version of a node valid at tv.asOf
+// Assumes the caller already holds the read lock
+func (tv *TemporalView) getNodeAtTime(id string) (*Node, error) {
+	versions, exists := tv.graph.nodeVersions[id]
+	if !exists || len(versions) == 0 {
+		return nil, nil
+	}
+
+	// Binary search to find the version valid at tv.asOf
+	idx := sort.Search(len(versions), func(i int) bool {
+		return versions[i].ValidFrom.After(tv.asOf)
+	})
+
+	if idx == 0 {
+		return nil, nil
+	}
+
+	candidate := versions[idx-1]
+	if candidate.IsValidAt(tv.asOf) {
+		return candidate, nil
+	}
+
+	return nil, nil
 }
 
 // GetRelationshipsForNode retrieves all relationships connected to a node that were valid at the temporal view's time
@@ -65,13 +84,41 @@ func (tv *TemporalView) GetRelationshipsForNode(nodeID string) []*Relationship {
 	defer tv.graph.mu.RUnlock()
 
 	rels := []*Relationship{}
-	for _, rel := range tv.graph.relationships {
-		// Check if the relationship involves this node AND was valid at the query time
-		if (rel.FromNodeID == nodeID || rel.ToNodeID == nodeID) && rel.IsValidAt(tv.asOf) {
-			rels = append(rels, rel)
+	// Iterate through all relationship IDs and get their version at tv.asOf
+	for relID := range tv.graph.relationshipVersions {
+		if rel := tv.getRelationshipAtTime(relID); rel != nil {
+			// Check if the relationship involves this node
+			if rel.FromNodeID == nodeID || rel.ToNodeID == nodeID {
+				rels = append(rels, rel)
+			}
 		}
 	}
 	return rels
+}
+
+// getRelationshipAtTime is a helper that finds the version of a relationship valid at tv.asOf
+// Assumes the caller already holds the read lock
+func (tv *TemporalView) getRelationshipAtTime(id string) *Relationship {
+	versions, exists := tv.graph.relationshipVersions[id]
+	if !exists || len(versions) == 0 {
+		return nil
+	}
+
+	// Binary search to find the version valid at tv.asOf
+	idx := sort.Search(len(versions), func(i int) bool {
+		return versions[i].ValidFrom.After(tv.asOf)
+	})
+
+	if idx == 0 {
+		return nil
+	}
+
+	candidate := versions[idx-1]
+	if candidate.IsValidAt(tv.asOf) {
+		return candidate
+	}
+
+	return nil
 }
 
 // GetRelationship retrieves a relationship by ID if it was valid at the temporal view's time
@@ -79,16 +126,7 @@ func (tv *TemporalView) GetRelationship(id string) (*Relationship, error) {
 	tv.graph.mu.RLock()
 	defer tv.graph.mu.RUnlock()
 
-	rel, exists := tv.graph.relationships[id]
-	if !exists {
-		return nil, nil // Relationship never existed
-	}
-
-	// Check if the relationship was valid at the query time
-	if !rel.IsValidAt(tv.asOf) {
-		return nil, nil // Relationship existed but wasn't valid at this time
-	}
-
+	rel := tv.getRelationshipAtTime(id)
 	return rel, nil
 }
 
@@ -98,8 +136,9 @@ func (tv *TemporalView) GetAllNodes() []*Node {
 	defer tv.graph.mu.RUnlock()
 
 	nodes := []*Node{}
-	for _, node := range tv.graph.nodes {
-		if node.IsValidAt(tv.asOf) {
+	// Iterate through all node IDs and get their version at tv.asOf
+	for nodeID := range tv.graph.nodeVersions {
+		if node, _ := tv.getNodeAtTime(nodeID); node != nil {
 			nodes = append(nodes, node)
 		}
 	}
@@ -112,8 +151,9 @@ func (tv *TemporalView) GetAllRelationships() []*Relationship {
 	defer tv.graph.mu.RUnlock()
 
 	rels := []*Relationship{}
-	for _, rel := range tv.graph.relationships {
-		if rel.IsValidAt(tv.asOf) {
+	// Iterate through all relationship IDs and get their version at tv.asOf
+	for relID := range tv.graph.relationshipVersions {
+		if rel := tv.getRelationshipAtTime(relID); rel != nil {
 			rels = append(rels, rel)
 		}
 	}
