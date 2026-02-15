@@ -409,7 +409,7 @@ func (g *DiskGraph) AsOf(t time.Time) *TemporalView {
 
 	for nodeID, embeddings := range allEmbs {
 		for _, emb := range embeddings {
-			snapshot.embeddings.Add(nodeID, emb.Vector, emb.Model)
+			snapshot.embeddings.Add(nodeID, emb.Vector, emb.Model, emb.PropertySnapshot)
 		}
 	}
 
@@ -700,7 +700,7 @@ func (g *DiskGraph) executeReadQuery(query *Query, embedder Embedder) (*QueryRes
 	embeddings, _ := g.boltStore.GetAllEmbeddings()
 	for nodeID, embs := range embeddings {
 		for _, emb := range embs {
-			memGraph.embeddings.Add(nodeID, emb.Vector, emb.Model)
+			memGraph.embeddings.Add(nodeID, emb.Vector, emb.Model, emb.PropertySnapshot)
 		}
 	}
 

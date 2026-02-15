@@ -1244,6 +1244,45 @@ func (p *Parser) parseSimilarToClause() *SimilarToClause {
 	// Parse query expression (usually a string)
 	clause.Query = p.parseExpression(LOWEST)
 
+	// Parse optional [VERSIONS] DRIFT THROUGH TIME or [VERSIONS] THROUGH TIME (must come before LIMIT/THRESHOLD)
+	if p.curTokenIs(TOKEN_DRIFT) {
+		p.nextToken()
+		if !p.curTokenIs(TOKEN_THROUGH) {
+			p.addError("expected THROUGH after DRIFT")
+			return nil
+		}
+		p.nextToken()
+		if !p.curTokenIs(TOKEN_TIME) {
+			p.addError("expected TIME after THROUGH")
+			return nil
+		}
+		p.nextToken()
+		clause.ThroughTime = true
+		clause.DriftMode = true
+	} else if p.curTokenIs(TOKEN_VERSIONS) {
+		// Handle optional VERSIONS keyword before THROUGH TIME
+		p.nextToken()
+		if !p.curTokenIs(TOKEN_THROUGH) {
+			p.addError("expected THROUGH after VERSIONS")
+			return nil
+		}
+		p.nextToken()
+		if !p.curTokenIs(TOKEN_TIME) {
+			p.addError("expected TIME after THROUGH")
+			return nil
+		}
+		p.nextToken()
+		clause.ThroughTime = true
+	} else if p.curTokenIs(TOKEN_THROUGH) {
+		p.nextToken()
+		if !p.curTokenIs(TOKEN_TIME) {
+			p.addError("expected TIME after THROUGH")
+			return nil
+		}
+		p.nextToken()
+		clause.ThroughTime = true
+	}
+
 	// Parse optional LIMIT
 	if p.curTokenIs(TOKEN_LIMIT) {
 		p.nextToken()

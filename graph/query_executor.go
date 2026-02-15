@@ -1401,8 +1401,14 @@ func (g *Graph) executeEmbedQuery(query *Query, embedder Embedder) (*QueryResult
 			return nil, fmt.Errorf("failed to embed node %s: %w", node.ID, err)
 		}
 
-		// Store embedding
-		g.embeddings.Add(node.ID, vector, "embedder")
+		// Create property snapshot
+		propertySnapshot := make(map[string]interface{})
+		for k, v := range node.Properties {
+			propertySnapshot[k] = v
+		}
+
+		// Store embedding with property snapshot
+		g.embeddings.Add(node.ID, vector, "embedder", propertySnapshot)
 		embeddedCount++
 	}
 
@@ -1499,8 +1505,6 @@ func (g *Graph) executeSimilarToQuery(query *Query, embedder Embedder) (*QueryRe
 		limit = 100 // Default limit
 	}
 
-	searchResults := g.embeddings.Search(queryVector, limit, asOf, candidateIDs)
-
 	// Filter by threshold and build results
 	result := &QueryResult{
 		Columns: []string{},
@@ -1516,41 +1520,125 @@ func (g *Graph) executeSimilarToQuery(query *Query, embedder Embedder) (*QueryRe
 				result.Columns = append(result.Columns, item.Variable)
 			}
 		}
-		// Add similarity score column
+		// Add similarity and temporal columns
 		result.Columns = append(result.Columns, "similarity")
+		if stc.ThroughTime {
+			result.Columns = append(result.Columns, "valid_from", "valid_to")
+			if stc.DriftMode {
+				result.Columns = append(result.Columns, "drift_from_previous", "drift_from_first")
+			}
+		}
 	} else {
-		result.Columns = []string{"node", "similarity"}
-	}
-
-	for _, sr := range searchResults {
-		// Apply threshold filter
-		if stc.Threshold > 0 && sr.Similarity < stc.Threshold {
-			continue
-		}
-
-		node := g.getNodeByID(sr.NodeID)
-		if node == nil {
-			continue
-		}
-
-		row := map[string]interface{}{}
-
-		if query.ReturnClause != nil {
-			for _, item := range query.ReturnClause.Items {
-				columnName := item.Variable
-				if item.Property != "" {
-					columnName = item.Variable + "." + item.Property
-					row[columnName] = node.Properties[item.Property]
-				} else {
-					row[columnName] = node
-				}
+		if stc.ThroughTime {
+			if stc.DriftMode {
+				result.Columns = []string{"node", "similarity", "valid_from", "valid_to", "drift_from_previous", "drift_from_first"}
+			} else {
+				result.Columns = []string{"node", "similarity", "valid_from", "valid_to"}
 			}
 		} else {
-			row["node"] = node
+			result.Columns = []string{"node", "similarity"}
 		}
-		row["similarity"] = sr.Similarity
+	}
 
-		result.Rows = append(result.Rows, row)
+	// Execute search based on THROUGH TIME flag
+	if stc.ThroughTime {
+		// Search all historical versions
+		versionedResults := g.embeddings.SearchAllVersions(queryVector, limit, candidateIDs, stc.Threshold, stc.DriftMode)
+
+		for _, vsr := range versionedResults {
+			node := g.getNodeByID(vsr.NodeID)
+			if node == nil {
+				continue
+			}
+
+			row := map[string]interface{}{}
+
+			// Use property snapshot from the embedding for historical values
+			properties := vsr.Embedding.PropertySnapshot
+			if properties == nil {
+				// Fallback to current properties if no snapshot exists
+				properties = node.Properties
+			}
+
+			if query.ReturnClause != nil {
+				for _, item := range query.ReturnClause.Items {
+					columnName := item.Variable
+					if item.Property != "" {
+						columnName = item.Variable + "." + item.Property
+						row[columnName] = properties[item.Property]
+					} else {
+						// For the full node, create a synthetic node with historical properties
+						historicalNode := &Node{
+							ID:         node.ID,
+							Labels:     node.Labels,
+							Properties: properties,
+							ValidFrom:  vsr.ValidFrom,
+							ValidTo:    vsr.ValidTo,
+						}
+						row[columnName] = historicalNode
+					}
+				}
+			} else {
+				// Create synthetic node with historical properties
+				historicalNode := &Node{
+					ID:         node.ID,
+					Labels:     node.Labels,
+					Properties: properties,
+					ValidFrom:  vsr.ValidFrom,
+					ValidTo:    vsr.ValidTo,
+				}
+				row["node"] = historicalNode
+			}
+			row["similarity"] = vsr.Similarity
+			row["valid_from"] = vsr.ValidFrom
+			if vsr.ValidTo != nil {
+				row["valid_to"] = *vsr.ValidTo
+			} else {
+				row["valid_to"] = nil
+			}
+
+			// Add drift metrics if in drift mode
+			if stc.DriftMode {
+				row["drift_from_previous"] = vsr.DriftFromPrevious
+				row["drift_from_first"] = vsr.DriftFromFirst
+			}
+
+			result.Rows = append(result.Rows, row)
+		}
+	} else {
+		// Search at specific point in time (existing behavior)
+		searchResults := g.embeddings.Search(queryVector, limit, asOf, candidateIDs)
+
+		for _, sr := range searchResults {
+			// Apply threshold filter
+			if stc.Threshold > 0 && sr.Similarity < stc.Threshold {
+				continue
+			}
+
+			node := g.getNodeByID(sr.NodeID)
+			if node == nil {
+				continue
+			}
+
+			row := map[string]interface{}{}
+
+			if query.ReturnClause != nil {
+				for _, item := range query.ReturnClause.Items {
+					columnName := item.Variable
+					if item.Property != "" {
+						columnName = item.Variable + "." + item.Property
+						row[columnName] = node.Properties[item.Property]
+					} else {
+						row[columnName] = node
+					}
+				}
+			} else {
+				row["node"] = node
+			}
+			row["similarity"] = sr.Similarity
+
+			result.Rows = append(result.Rows, row)
+		}
 	}
 
 	return result, nil

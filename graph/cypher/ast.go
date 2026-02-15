@@ -189,9 +189,11 @@ func (e *EmbedClause) clause() {}
 
 // SimilarToClause represents SIMILAR TO clause (custom extension)
 type SimilarToClause struct {
-	Query     Expression // Search query text
-	Limit     Expression // Max results
-	Threshold Expression // Min similarity threshold
+	Query       Expression // Search query text
+	Limit       Expression // Max results
+	Threshold   Expression // Min similarity threshold
+	ThroughTime bool       // If true, search all historical versions
+	DriftMode   bool       // If true (with ThroughTime), calculate semantic drift metrics
 }
 
 func (s *SimilarToClause) node()   {}

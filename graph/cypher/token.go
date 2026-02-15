@@ -131,6 +131,9 @@ const (
 	TOKEN_SIMILAR
 	TOKEN_TO
 	TOKEN_THRESHOLD
+	TOKEN_THROUGH
+	TOKEN_DRIFT
+	TOKEN_VERSIONS
 )
 
 // Token represents a lexical token
@@ -224,6 +227,9 @@ var keywords = map[string]TokenType{
 	"SIMILAR":   TOKEN_SIMILAR,
 	"TO":        TOKEN_TO,
 	"THRESHOLD": TOKEN_THRESHOLD,
+	"THROUGH":   TOKEN_THROUGH,
+	"DRIFT":     TOKEN_DRIFT,
+	"VERSIONS":  TOKEN_VERSIONS,
 }
 
 // LookupIdent checks if an identifier is a keyword

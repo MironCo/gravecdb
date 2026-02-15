@@ -140,10 +140,12 @@ type GraphEmbedClause struct {
 }
 
 type GraphSimilarToClause struct {
-	Variable  string
-	QueryText string
-	Limit     int
-	Threshold float32
+	Variable    string
+	QueryText   string
+	Limit       int
+	Threshold   float32
+	ThroughTime bool
+	DriftMode   bool
 }
 
 // ConvertToGraphQuery converts the AST to graph-compatible query
@@ -582,6 +584,9 @@ func convertSimilarToGraph(s *SimilarToClause) *GraphSimilarToClause {
 			gs.Threshold = float32(floatLit.Value)
 		}
 	}
+
+	gs.ThroughTime = s.ThroughTime
+	gs.DriftMode = s.DriftMode
 
 	return gs
 }

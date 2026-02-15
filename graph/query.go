@@ -34,10 +34,12 @@ type EmbedClause struct {
 
 // SimilarToClause represents a SIMILAR TO semantic search
 type SimilarToClause struct {
-	Variable   string  // The node variable to search (e.g., "p" in "(p:Person)")
-	QueryText  string  // The search query text
-	Limit      int     // Max results (0 = no limit)
-	Threshold  float32 // Min similarity threshold (0 = no threshold)
+	Variable    string  // The node variable to search (e.g., "p" in "(p:Person)")
+	QueryText   string  // The search query text
+	Limit       int     // Max results (0 = no limit)
+	Threshold   float32 // Min similarity threshold (0 = no threshold)
+	ThroughTime bool    // If true, search all historical embedding versions
+	DriftMode   bool    // If true (with ThroughTime), calculate semantic drift metrics
 }
 
 // TimeClause represents temporal query constraints
@@ -349,10 +351,12 @@ func convertGraphQueryToQuery(gq *cypher.GraphQuery) *Query {
 	// Convert SimilarToClause
 	if gq.SimilarToClause != nil {
 		q.SimilarToClause = &SimilarToClause{
-			Variable:  gq.SimilarToClause.Variable,
-			QueryText: gq.SimilarToClause.QueryText,
-			Limit:     gq.SimilarToClause.Limit,
-			Threshold: gq.SimilarToClause.Threshold,
+			Variable:    gq.SimilarToClause.Variable,
+			QueryText:   gq.SimilarToClause.QueryText,
+			Limit:       gq.SimilarToClause.Limit,
+			Threshold:   gq.SimilarToClause.Threshold,
+			ThroughTime: gq.SimilarToClause.ThroughTime,
+			DriftMode:   gq.SimilarToClause.DriftMode,
 		}
 	}
 

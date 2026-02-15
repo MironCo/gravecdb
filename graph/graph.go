@@ -13,8 +13,8 @@ type Graph struct {
 	nodesByLabel  map[string]map[string]*Node // label -> nodeID -> Node
 	embeddings    *EmbeddingStore             // Vector embeddings for semantic search
 	mu            sync.RWMutex
-	wal           *WAL        // Write-Ahead Log for persistence (nil if persistence disabled)
-	boltStore     *BoltStore  // bbolt storage backend (nil if using WAL or no persistence)
+	wal           *WAL       // Write-Ahead Log for persistence (nil if persistence disabled)
+	boltStore     *BoltStore // bbolt storage backend (nil if using WAL or no persistence)
 }
 
 // NewGraph creates a new graph database instance without persistence
@@ -177,7 +177,7 @@ func (g *Graph) loadFromBolt() error {
 	for nodeID, embeddings := range embeddingsMap {
 		for _, emb := range embeddings {
 			// Re-add each embedding to maintain versioning
-			g.embeddings.Add(nodeID, emb.Vector, emb.Model)
+			g.embeddings.Add(nodeID, emb.Vector, emb.Model, emb.PropertySnapshot)
 		}
 	}
 
@@ -772,11 +772,18 @@ func (g *Graph) SetNodeEmbedding(nodeID string, vector []float32, model string) 
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if _, exists := g.nodes[nodeID]; !exists {
+	node, exists := g.nodes[nodeID]
+	if !exists {
 		return fmt.Errorf("node with ID %s not found", nodeID)
 	}
 
-	g.embeddings.Add(nodeID, vector, model)
+	// Create a deep copy of the node's current properties
+	propertySnapshot := make(map[string]interface{})
+	for k, v := range node.Properties {
+		propertySnapshot[k] = v
+	}
+
+	g.embeddings.Add(nodeID, vector, model, propertySnapshot)
 
 	// Persist to bbolt if enabled (save all embedding versions for this node)
 	if g.boltStore != nil {
@@ -836,4 +843,38 @@ func (g *Graph) SemanticSearchAt(query []float32, k int, asOf time.Time) []Searc
 	}
 
 	return g.embeddings.Search(query, k, asOf, validNodeIDs)
+}
+
+// SemanticSearchAllVersions finds all historical versions of nodes similar to a query vector
+// Returns all embedding versions across all time periods that match the query
+func (g *Graph) SemanticSearchAllVersions(query []float32, k int, threshold float32, labelFilter []string, calculateDrift bool) []VersionedSearchResult {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	// Build set of valid node IDs (nodes that have ever existed)
+	// Apply label filtering if specified
+	validNodeIDs := make(map[string]bool)
+	for id, node := range g.nodes {
+		// If label filter is specified, check if node has any of those labels
+		if len(labelFilter) > 0 {
+			hasLabel := false
+			for _, label := range labelFilter {
+				for _, nodeLabel := range node.Labels {
+					if nodeLabel == label {
+						hasLabel = true
+						break
+					}
+				}
+				if hasLabel {
+					break
+				}
+			}
+			if !hasLabel {
+				continue
+			}
+		}
+		validNodeIDs[id] = true
+	}
+
+	return g.embeddings.SearchAllVersions(query, k, validNodeIDs, threshold, calculateDrift)
 }
