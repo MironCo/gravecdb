@@ -402,7 +402,27 @@ func (g *DiskGraph) findMatchesUnlocked(pattern *MatchPattern, where *WhereClaus
 				continue
 			}
 
-			// Get relationships for this node using index
+			// Get target pattern info
+			toIdx := relPattern.ToIndex
+			var toPattern *NodePattern
+			if toIdx < len(pattern.Nodes) {
+				toPattern = &pattern.Nodes[toIdx]
+			}
+
+			// Handle variable-length paths
+			if relPattern.VarLength {
+				// Use BFS to find all paths within hop range
+				pathMatches := g.findVariableLengthPaths(
+					fromNode,
+					relPattern,
+					toPattern,
+					match,
+				)
+				newMatches = append(newMatches, pathMatches...)
+				continue
+			}
+
+			// Regular single-hop relationship matching
 			rels := g.getRelationshipsForNodeUnlocked(fromNode.ID)
 
 			for _, rel := range rels {
@@ -448,9 +468,7 @@ func (g *DiskGraph) findMatchesUnlocked(pattern *MatchPattern, where *WhereClaus
 				}
 
 				// Check target node labels
-				toIdx := relPattern.ToIndex
-				if toIdx < len(pattern.Nodes) {
-					toPattern := pattern.Nodes[toIdx]
+				if toPattern != nil {
 					if len(toPattern.Labels) > 0 {
 						hasLabel := false
 						for _, reqLabel := range toPattern.Labels {
@@ -500,6 +518,166 @@ func (g *DiskGraph) findMatchesUnlocked(pattern *MatchPattern, where *WhereClaus
 	}
 
 	return matches
+}
+
+// findVariableLengthPaths finds all paths matching variable-length pattern [*min..max]
+// Uses BFS to explore paths within the specified hop range
+func (g *DiskGraph) findVariableLengthPaths(
+	startNode *Node,
+	relPattern RelPattern,
+	toPattern *NodePattern,
+	baseMatch map[string]interface{},
+) []map[string]interface{} {
+	var results []map[string]interface{}
+
+	minHops := relPattern.MinHops
+	maxHops := relPattern.MaxHops
+	if maxHops == -1 {
+		maxHops = 10 // Reasonable default limit to prevent infinite loops
+	}
+
+	// pathState tracks a node and the path taken to reach it
+	type pathState struct {
+		node        *Node
+		rels        []*Relationship
+		depth       int
+		visitedInPath map[string]bool // Track nodes visited in THIS path to avoid cycles
+	}
+
+	// BFS queue - each path tracks its own visited nodes
+	initialVisited := make(map[string]bool)
+	initialVisited[startNode.ID] = true
+	queue := []pathState{{node: startNode, rels: nil, depth: 0, visitedInPath: initialVisited}}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		// If we're within valid depth range and target matches, add to results
+		if current.depth >= minHops && current.depth <= maxHops {
+			// Check if current node matches target pattern (if specified)
+			if toPattern != nil && current.node.ID != startNode.ID {
+				matches := true
+
+				// Check labels
+				if len(toPattern.Labels) > 0 {
+					hasLabel := false
+					for _, reqLabel := range toPattern.Labels {
+						for _, nodeLabel := range current.node.Labels {
+							if reqLabel == nodeLabel {
+								hasLabel = true
+								break
+							}
+						}
+						if hasLabel {
+							break
+						}
+					}
+					if !hasLabel {
+						matches = false
+					}
+				}
+
+				// Check properties
+				if matches && len(toPattern.Properties) > 0 {
+					if !matchesProperties(current.node.Properties, toPattern.Properties) {
+						matches = false
+					}
+				}
+
+				if matches {
+					newMatch := make(map[string]interface{})
+					for k, v := range baseMatch {
+						newMatch[k] = v
+					}
+					if toPattern.Variable != "" {
+						newMatch[toPattern.Variable] = current.node
+					}
+					// For variable-length paths, store the list of relationships
+					if relPattern.Variable != "" {
+						newMatch[relPattern.Variable] = current.rels
+					}
+					results = append(results, newMatch)
+				}
+			}
+		}
+
+		// Continue BFS if we haven't reached max depth
+		if current.depth >= maxHops {
+			continue
+		}
+
+		// Get relationships for current node
+		rels := g.getRelationshipsForNodeUnlocked(current.node.ID)
+
+		for _, rel := range rels {
+			// Check relationship type
+			if len(relPattern.Types) > 0 {
+				typeMatch := false
+				for _, t := range relPattern.Types {
+					if rel.Type == t {
+						typeMatch = true
+						break
+					}
+				}
+				if !typeMatch {
+					continue
+				}
+			}
+
+			// Determine next node based on direction
+			var nextNodeID string
+			if relPattern.Direction == "->" {
+				if rel.FromNodeID != current.node.ID {
+					continue
+				}
+				nextNodeID = rel.ToNodeID
+			} else if relPattern.Direction == "<-" {
+				if rel.ToNodeID != current.node.ID {
+					continue
+				}
+				nextNodeID = rel.FromNodeID
+			} else {
+				// Undirected
+				if rel.FromNodeID == current.node.ID {
+					nextNodeID = rel.ToNodeID
+				} else {
+					nextNodeID = rel.FromNodeID
+				}
+			}
+
+			// Avoid cycles within THIS path only
+			if current.visitedInPath[nextNodeID] {
+				continue
+			}
+
+			nextNode := g.getNodeUnlocked(nextNodeID)
+			if nextNode == nil || nextNode.ValidTo != nil {
+				continue
+			}
+
+			// Build new path with its own visited set
+			newRels := make([]*Relationship, len(current.rels)+1)
+			copy(newRels, current.rels)
+			newRels[len(current.rels)] = rel
+
+			// Copy visited set for new path
+			newVisited := make(map[string]bool)
+			for k, v := range current.visitedInPath {
+				newVisited[k] = v
+			}
+			newVisited[nextNodeID] = true
+
+			queue = append(queue, pathState{
+				node:          nextNode,
+				rels:          newRels,
+				depth:         current.depth + 1,
+				visitedInPath: newVisited,
+			})
+		}
+	}
+
+	return results
 }
 
 // filterMatchesUnlocked applies WHERE conditions (caller must hold lock)

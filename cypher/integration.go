@@ -62,6 +62,9 @@ type GraphRelPattern struct {
 	FromIndex int
 	ToIndex   int
 	Direction string
+	VarLength bool // True if variable-length pattern [*]
+	MinHops   int  // Minimum hops (0 if not specified)
+	MaxHops   int  // Maximum hops (-1 for unlimited)
 }
 
 type GraphCreateClause struct {
@@ -348,6 +351,22 @@ func convertPatternToGraph(p *Pattern) (*GraphMatchPattern, error) {
 					direction = "<-"
 				}
 
+				// Handle variable-length path settings
+				minHops := 1
+				maxHops := 1
+				if e.VarLength {
+					if e.MinHops != nil {
+						minHops = *e.MinHops
+					} else {
+						minHops = 1 // Default min is 1
+					}
+					if e.MaxHops != nil {
+						maxHops = *e.MaxHops
+					} else {
+						maxHops = -1 // Unlimited
+					}
+				}
+
 				// Calculate indices within this part
 				nodeIdx := (i + 1) / 2 // Node index relative to this pattern part
 				gp.Relationships = append(gp.Relationships, GraphRelPattern{
@@ -356,6 +375,9 @@ func convertPatternToGraph(p *Pattern) (*GraphMatchPattern, error) {
 					FromIndex: baseNodeIndex + nodeIdx - 1,
 					ToIndex:   baseNodeIndex + nodeIdx,
 					Direction: direction,
+					VarLength: e.VarLength,
+					MinHops:   minHops,
+					MaxHops:   maxHops,
 				})
 			}
 		}

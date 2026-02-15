@@ -297,6 +297,72 @@ def test_unwind_operations(session):
         print("  ✓ UNWIND works with strings")
 
 
+def test_variable_length_paths(session):
+    """Test variable-length path patterns [*1..3]."""
+    print("\n" + "=" * 60)
+    print("VARIABLE-LENGTH PATHS")
+    print("=" * 60)
+
+    # Create a chain of nodes: A -> B -> C -> D
+    run_test(session, "Create chain node A",
+             "CREATE (a:Chain {name: 'A', level: 1})",
+             expect_results=False)
+    run_test(session, "Create chain node B",
+             "CREATE (b:Chain {name: 'B', level: 2})",
+             expect_results=False)
+    run_test(session, "Create chain node C",
+             "CREATE (c:Chain {name: 'C', level: 3})",
+             expect_results=False)
+    run_test(session, "Create chain node D",
+             "CREATE (d:Chain {name: 'D', level: 4})",
+             expect_results=False)
+
+    # Create relationships
+    run_test(session, "Create A->B",
+             "MATCH (a:Chain {name: 'A'}), (b:Chain {name: 'B'}) CREATE (a)-[:NEXT]->(b)",
+             expect_results=False)
+    run_test(session, "Create B->C",
+             "MATCH (b:Chain {name: 'B'}), (c:Chain {name: 'C'}) CREATE (b)-[:NEXT]->(c)",
+             expect_results=False)
+    run_test(session, "Create C->D",
+             "MATCH (c:Chain {name: 'C'}), (d:Chain {name: 'D'}) CREATE (c)-[:NEXT]->(d)",
+             expect_results=False)
+
+    # Test variable-length path with exact range
+    records = run_test(session, "Variable-length path [*1..2] from A",
+                       "MATCH (a:Chain {name: 'A'})-[*1..2]->(x:Chain) RETURN x.name")
+    if records:
+        names = [dict(r)['x.name'] for r in records]
+        print(f"  Found nodes: {names}")
+        if 'B' in names and 'C' in names:
+            print("  ✓ Found nodes 1-2 hops away (B, C)")
+        if 'D' in names:
+            print("  ✗ Should not find D (3 hops away)")
+
+    # Test variable-length path with larger range
+    records = run_test(session, "Variable-length path [*1..3] from A",
+                       "MATCH (a:Chain {name: 'A'})-[*1..3]->(x:Chain) RETURN x.name")
+    if records:
+        names = [dict(r)['x.name'] for r in records]
+        print(f"  Found nodes: {names}")
+        if 'B' in names and 'C' in names and 'D' in names:
+            print("  ✓ Found all nodes 1-3 hops away (B, C, D)")
+
+    # Test with specific relationship type
+    records = run_test(session, "Variable-length path [*1..3] with type NEXT",
+                       "MATCH (a:Chain {name: 'A'})-[:NEXT*1..3]->(x:Chain) RETURN x.name")
+    if records:
+        names = [dict(r)['x.name'] for r in records]
+        print(f"  Found nodes: {names}")
+        if len(names) == 3:
+            print("  ✓ Found all 3 reachable nodes via NEXT relationship")
+
+    # Cleanup chain nodes
+    run_test(session, "Delete chain nodes",
+             "MATCH (n:Chain) DETACH DELETE n",
+             expect_results=False)
+
+
 def cleanup(session):
     """Clean up test data."""
     print("\n" + "=" * 60)
@@ -354,6 +420,7 @@ def main():
         test_merge_operations(session)
         test_remove_operations(session)
         test_unwind_operations(session)
+        test_variable_length_paths(session)
 
         # Cleanup
         cleanup(session)

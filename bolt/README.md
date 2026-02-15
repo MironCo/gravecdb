@@ -69,7 +69,7 @@ GravecDB implements the Neo4j Bolt protocol (v4.4), allowing connections from st
 | Map literals | ✅ | `{key: 'value'}` |
 | CASE expressions | ✅ | `CASE WHEN ... THEN ... END` |
 | Aggregate functions | ✅ | `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `COLLECT` |
-| Variable-length paths | ❌ | `(a)-[*1..3]->(b)` |
+| Variable-length paths | ✅ | `(a)-[*1..3]->(b)` |
 | Path functions | ❌ | `shortestPath()`, `allShortestPaths()` |
 
 #### GravecDB Extensions
@@ -109,7 +109,7 @@ GravecDB implements the Neo4j Bolt protocol (v4.4), allowing connections from st
 ### High Priority
 - [x] ~~Fix SET clause to work with following clauses (RETURN, etc.)~~
 - [x] ~~Implement MERGE clause~~
-- [ ] Add variable-length path support `[*1..5]`
+- [x] ~~Add variable-length path support `[*1..5]`~~
 - [ ] Implement Path data type for Bolt responses
 
 ### Medium Priority

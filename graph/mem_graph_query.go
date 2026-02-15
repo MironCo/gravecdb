@@ -390,6 +390,12 @@ func (g *memGraph) extendMatch(currentMatch Match, pattern *MatchPattern, relInd
 		return
 	}
 
+	// Handle variable-length paths
+	if relPattern.VarLength {
+		g.extendMatchVariableLength(currentMatch, pattern, relIndex, queryTime, allMatches, fromNode, relPattern, toNodePattern)
+		return
+	}
+
 	// Get all relationships from this node
 	rels := g.getRelationshipsForNodeUnlocked(fromNode.ID)
 
@@ -479,6 +485,149 @@ func (g *memGraph) extendMatch(currentMatch Match, pattern *MatchPattern, relInd
 
 		// Recurse to match next relationship
 		g.extendMatch(extendedMatch, pattern, relIndex+1, queryTime, allMatches)
+	}
+}
+
+// extendMatchVariableLength handles variable-length path patterns [*min..max]
+func (g *memGraph) extendMatchVariableLength(currentMatch Match, pattern *MatchPattern, relIndex int, queryTime *time.Time, allMatches *[]Match, startNode *Node, relPattern RelPattern, toNodePattern NodePattern) {
+	minHops := relPattern.MinHops
+	maxHops := relPattern.MaxHops
+	if maxHops == -1 {
+		maxHops = 10 // Reasonable default limit
+	}
+
+	// pathState tracks a node and the path taken to reach it
+	type pathState struct {
+		node          *Node
+		rels          []*Relationship
+		depth         int
+		visitedInPath map[string]bool
+	}
+
+	// BFS queue - each path tracks its own visited nodes
+	initialVisited := make(map[string]bool)
+	initialVisited[startNode.ID] = true
+	queue := []pathState{{node: startNode, rels: nil, depth: 0, visitedInPath: initialVisited}}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		// If we're within valid depth range and target matches, add to results
+		if current.depth >= minHops && current.depth <= maxHops && current.node.ID != startNode.ID {
+			// Check if current node matches target pattern
+			if g.nodeMatchesPattern(current.node, toNodePattern) {
+				// Check temporal validity
+				validNode := true
+				if queryTime != nil {
+					validNode = current.node.IsValidAt(*queryTime)
+				} else {
+					validNode = current.node.IsCurrentlyValid()
+				}
+
+				if validNode {
+					// Create extended match
+					extendedMatch := Match{}
+					for k, v := range currentMatch {
+						extendedMatch[k] = v
+					}
+					if toNodePattern.Variable != "" {
+						extendedMatch[toNodePattern.Variable] = current.node
+					}
+					if relPattern.Variable != "" {
+						extendedMatch[relPattern.Variable] = current.rels
+					}
+
+					// Recurse to match next relationship pattern
+					g.extendMatch(extendedMatch, pattern, relIndex+1, queryTime, allMatches)
+				}
+			}
+		}
+
+		// Continue BFS if we haven't reached max depth
+		if current.depth >= maxHops {
+			continue
+		}
+
+		// Get relationships for current node
+		rels := g.getRelationshipsForNodeUnlocked(current.node.ID)
+
+		for _, rel := range rels {
+			// Check temporal validity
+			if queryTime != nil {
+				if !rel.IsValidAt(*queryTime) {
+					continue
+				}
+			} else {
+				if !rel.IsCurrentlyValid() {
+					continue
+				}
+			}
+
+			// Check relationship type
+			if len(relPattern.Types) > 0 {
+				typeMatch := false
+				for _, t := range relPattern.Types {
+					if rel.Type == t {
+						typeMatch = true
+						break
+					}
+				}
+				if !typeMatch {
+					continue
+				}
+			}
+
+			// Determine next node based on direction
+			var nextNodeID string
+			if relPattern.Direction == "->" {
+				if rel.FromNodeID != current.node.ID {
+					continue
+				}
+				nextNodeID = rel.ToNodeID
+			} else if relPattern.Direction == "<-" {
+				if rel.ToNodeID != current.node.ID {
+					continue
+				}
+				nextNodeID = rel.FromNodeID
+			} else {
+				// Undirected
+				if rel.FromNodeID == current.node.ID {
+					nextNodeID = rel.ToNodeID
+				} else {
+					nextNodeID = rel.FromNodeID
+				}
+			}
+
+			// Avoid cycles within THIS path only
+			if current.visitedInPath[nextNodeID] {
+				continue
+			}
+
+			nextNode := g.getNodeByID(nextNodeID)
+			if nextNode == nil {
+				continue
+			}
+
+			// Build new path with its own visited set
+			newRels := make([]*Relationship, len(current.rels)+1)
+			copy(newRels, current.rels)
+			newRels[len(current.rels)] = rel
+
+			// Copy visited set for new path
+			newVisited := make(map[string]bool)
+			for k, v := range current.visitedInPath {
+				newVisited[k] = v
+			}
+			newVisited[nextNodeID] = true
+
+			queue = append(queue, pathState{
+				node:          nextNode,
+				rels:          newRels,
+				depth:         current.depth + 1,
+				visitedInPath: newVisited,
+			})
+		}
 	}
 }
 
