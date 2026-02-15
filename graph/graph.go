@@ -7,6 +7,7 @@ import (
 
 	"github.com/MironCo/gravecdb/core"
 	"github.com/MironCo/gravecdb/embedding"
+	"github.com/MironCo/gravecdb/storage"
 )
 
 // Type aliases for core types
@@ -30,8 +31,8 @@ type Graph struct {
 	nodesByLabel       map[string]map[string]*Node // label -> nodeID -> Node
 	embeddings         *embedding.Store            // Vector embeddings for semantic search
 	mu                 sync.RWMutex
-	wal                *WAL       // Write-Ahead Log for persistence (nil if persistence disabled)
-	boltStore          *BoltStore // bbolt storage backend (nil if using WAL or no persistence)
+	wal                *WAL              // Write-Ahead Log for persistence (nil if persistence disabled)
+	boltStore          *storage.BoltStore // bbolt storage backend (nil if using WAL or no persistence)
 }
 
 // NewGraph creates a new graph database instance without persistence
@@ -137,7 +138,7 @@ func NewGraphWithMaxPerformance(dataDir string) (*Graph, error) {
 // dataDir: directory where gravecdb.db file will be stored
 func NewGraphWithBolt(dataDir string) (*Graph, error) {
 	// Create the bbolt storage backend
-	store, err := NewBoltStore(dataDir)
+	store, err := storage.NewBoltStore(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bolt store: %w", err)
 	}

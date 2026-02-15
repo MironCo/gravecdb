@@ -5,18 +5,19 @@ import (
 	"sync"
 	"time"
 
-	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/MironCo/gravecdb/storage"
 	"github.com/google/uuid"
+	lru "github.com/hashicorp/golang-lru/v2"
 )
 
 // DiskGraph uses hybrid storage: indexes in RAM, data on disk with LRU cache
 // Much lower RAM usage than full in-memory, but still fast for common queries
 type DiskGraph struct {
-	boltStore *BoltStore
+	boltStore *storage.BoltStore
 
 	// In-memory indexes (small footprint - just IDs)
-	labelIndex   map[string][]string   // label -> []nodeIDs
-	nodeRelIndex map[string][]string   // nodeID -> []relIDs (for fast relationship lookups)
+	labelIndex   map[string][]string // label -> []nodeIDs
+	nodeRelIndex map[string][]string // nodeID -> []relIDs (for fast relationship lookups)
 
 	// LRU caches for hot data
 	nodeCache *lru.Cache[string, *Node]         // Recently accessed nodes
@@ -28,7 +29,7 @@ type DiskGraph struct {
 // NewDiskGraph creates a disk-first graph with in-memory indexes and LRU cache
 // cacheSize: number of nodes/relationships to keep in LRU cache (0 = use default 10000)
 func NewDiskGraph(dataDir string, cacheSize int) (*DiskGraph, error) {
-	store, err := NewBoltStore(dataDir)
+	store, err := storage.NewBoltStore(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bolt store: %w", err)
 	}
@@ -1376,10 +1377,7 @@ func (g *DiskGraph) Stats() (map[string]interface{}, error) {
 		return nil, err
 	}
 
-	boltStats, err := g.boltStore.Stats()
-	if err != nil {
-		return nil, err
-	}
+	boltStats := g.boltStore.Stats()
 
 	return map[string]interface{}{
 		"nodes":         len(nodes),
@@ -1418,7 +1416,7 @@ func (dg *DiskGraph) GetAllRelationshipVersions() []*Relationship {
 // All operations within the transaction are atomic
 type DiskGraphTransaction struct {
 	g         *DiskGraph
-	tx        *Tx
+	tx        *storage.Tx
 	committed bool
 
 	// Track changes for index updates on commit

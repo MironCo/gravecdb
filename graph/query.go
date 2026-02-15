@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/MironCo/gravecdb/graph/cypher"
+	"github.com/MironCo/gravecdb/cypher"
 )
 
 // Query represents a parsed Cypher-like query

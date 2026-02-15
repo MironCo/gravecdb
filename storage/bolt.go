@@ -1,4 +1,4 @@
-package graph
+package storage
 
 import (
 	"encoding/json"
@@ -7,11 +7,12 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/MironCo/gravecdb/core"
+	"github.com/MironCo/gravecdb/embedding"
 	bolt "go.etcd.io/bbolt"
 )
 
 // BoltStore provides bbolt-based persistence for the graph database
-// Replaces WAL + Snapshots with a single transactional key-value store
 type BoltStore struct {
 	db *bolt.DB
 }
@@ -21,20 +22,18 @@ var (
 	nodesBucket         = []byte("nodes")
 	relationshipsBucket = []byte("relationships")
 	embeddingsBucket    = []byte("embeddings")
-	labelIndexBucket    = []byte("label_index") // label:nodeID -> nodeID
+	labelIndexBucket    = []byte("label_index")
 	metaBucket          = []byte("meta")
 )
 
 // NewBoltStore creates a new bbolt-backed storage engine
 func NewBoltStore(dataDir string) (*BoltStore, error) {
-	// Create data directory if it doesn't exist
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
 
 	dbPath := filepath.Join(dataDir, "gravecdb.db")
 
-	// Open bbolt database
 	db, err := bolt.Open(dbPath, 0600, &bolt.Options{
 		Timeout: 1 * time.Second,
 	})
@@ -42,7 +41,6 @@ func NewBoltStore(dataDir string) (*BoltStore, error) {
 		return nil, fmt.Errorf("failed to open bbolt database: %w", err)
 	}
 
-	// Create buckets if they don't exist
 	err = db.Update(func(tx *bolt.Tx) error {
 		for _, bucket := range [][]byte{
 			nodesBucket,
@@ -66,25 +64,20 @@ func NewBoltStore(dataDir string) (*BoltStore, error) {
 }
 
 // SaveNode persists a node to bbolt
-// Uses composite key nodeID:validFromNano to support multiple versions per node
-func (s *BoltStore) SaveNode(node *Node) error {
+func (s *BoltStore) SaveNode(node *core.Node) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(nodesBucket)
 
-		// Serialize node to JSON
 		data, err := json.Marshal(node)
 		if err != nil {
 			return fmt.Errorf("failed to marshal node: %w", err)
 		}
 
-		// Store node by composite key: ID:ValidFrom.UnixNano()
-		// This allows multiple versions of the same node to coexist
 		key := fmt.Sprintf("%s:%d", node.ID, node.ValidFrom.UnixNano())
 		if err := b.Put([]byte(key), data); err != nil {
 			return fmt.Errorf("failed to save node: %w", err)
 		}
 
-		// Update label index
 		lb := tx.Bucket(labelIndexBucket)
 		for _, label := range node.Labels {
 			indexKey := []byte(label + ":" + node.ID)
@@ -97,46 +90,43 @@ func (s *BoltStore) SaveNode(node *Node) error {
 	})
 }
 
-// GetNode retrieves the current (latest valid) version of a node by ID
-// Scans all versions with the given ID prefix and returns the one that is currently valid
-func (s *BoltStore) GetNode(id string) (*Node, error) {
-	var node *Node
+// GetNode retrieves the current version of a node by ID
+func (s *BoltStore) GetNode(id string) (*core.Node, error) {
+	var node *core.Node
 
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(nodesBucket)
 		c := b.Cursor()
 
-		// Seek to the first key with this node ID prefix
 		prefix := []byte(id + ":")
 		for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
-			var n Node
+			var n core.Node
 			if err := json.Unmarshal(v, &n); err != nil {
 				return fmt.Errorf("failed to unmarshal node: %w", err)
 			}
 
-			// Find the version that is currently valid (ValidTo == nil)
 			if n.ValidTo == nil {
 				node = &n
 				return nil
 			}
 		}
 
-		return nil // Node not found or all versions are expired
+		return nil
 	})
 
 	return node, err
 }
 
 // GetAllNodes retrieves all nodes from the database
-func (s *BoltStore) GetAllNodes() ([]*Node, error) {
-	var nodes []*Node
+func (s *BoltStore) GetAllNodes() ([]*core.Node, error) {
+	var nodes []*core.Node
 
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(nodesBucket)
 		c := b.Cursor()
 
 		for k, v := c.First(); k != nil; k, v = c.Next() {
-			var node Node
+			var node core.Node
 			if err := json.Unmarshal(v, &node); err != nil {
 				return fmt.Errorf("failed to unmarshal node: %w", err)
 			}
@@ -150,24 +140,21 @@ func (s *BoltStore) GetAllNodes() ([]*Node, error) {
 }
 
 // GetNodesByLabel retrieves all nodes with a specific label
-func (s *BoltStore) GetNodesByLabel(label string) ([]*Node, error) {
-	var nodes []*Node
+func (s *BoltStore) GetNodesByLabel(label string) ([]*core.Node, error) {
+	var nodes []*core.Node
 
 	err := s.db.View(func(tx *bolt.Tx) error {
 		lb := tx.Bucket(labelIndexBucket)
 		nb := tx.Bucket(nodesBucket)
 		c := lb.Cursor()
 
-		// Seek to the first key with this label prefix
 		prefix := []byte(label + ":")
 		for k, _ := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, _ = c.Next() {
-			// Extract node ID from index key (format: "label:nodeID")
 			nodeID := k[len(prefix):]
 
-			// Fetch the actual node
 			data := nb.Get(nodeID)
 			if data != nil {
-				var node Node
+				var node core.Node
 				if err := json.Unmarshal(data, &node); err != nil {
 					return fmt.Errorf("failed to unmarshal node: %w", err)
 				}
@@ -181,24 +168,22 @@ func (s *BoltStore) GetNodesByLabel(label string) ([]*Node, error) {
 	return nodes, err
 }
 
-// DeleteNode marks a node as deleted (soft delete - sets ValidTo)
+// DeleteNode marks a node as deleted (soft delete)
 func (s *BoltStore) DeleteNode(id string, deletedAt time.Time) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(nodesBucket)
 		c := b.Cursor()
 
-		// Find the current valid version of this node
 		prefix := []byte(id + ":")
 		var foundKey []byte
-		var node Node
+		var node core.Node
 
 		for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
-			var n Node
+			var n core.Node
 			if err := json.Unmarshal(v, &n); err != nil {
 				return fmt.Errorf("failed to unmarshal node: %w", err)
 			}
 
-			// Find the version that is currently valid (ValidTo == nil)
 			if n.ValidTo == nil {
 				foundKey = k
 				node = n
@@ -210,10 +195,8 @@ func (s *BoltStore) DeleteNode(id string, deletedAt time.Time) error {
 			return fmt.Errorf("node not found: %s", id)
 		}
 
-		// Set ValidTo (soft delete)
 		node.ValidTo = &deletedAt
 
-		// Save updated node with the same key
 		updatedData, err := json.Marshal(node)
 		if err != nil {
 			return fmt.Errorf("failed to marshal node: %w", err)
@@ -224,9 +207,7 @@ func (s *BoltStore) DeleteNode(id string, deletedAt time.Time) error {
 }
 
 // SaveRelationship persists a relationship to bbolt
-// SaveRelationship persists a relationship to bbolt
-// Uses composite key relID:validFromNano to support multiple versions
-func (s *BoltStore) SaveRelationship(rel *Relationship) error {
+func (s *BoltStore) SaveRelationship(rel *core.Relationship) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(relationshipsBucket)
 
@@ -235,29 +216,26 @@ func (s *BoltStore) SaveRelationship(rel *Relationship) error {
 			return fmt.Errorf("failed to marshal relationship: %w", err)
 		}
 
-		// Store relationship by composite key: ID:ValidFrom.UnixNano()
 		key := fmt.Sprintf("%s:%d", rel.ID, rel.ValidFrom.UnixNano())
 		return b.Put([]byte(key), data)
 	})
 }
 
-// GetRelationship retrieves the current (latest valid) version of a relationship by ID
-func (s *BoltStore) GetRelationship(id string) (*Relationship, error) {
-	var rel *Relationship
+// GetRelationship retrieves the current version of a relationship by ID
+func (s *BoltStore) GetRelationship(id string) (*core.Relationship, error) {
+	var rel *core.Relationship
 
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(relationshipsBucket)
 		c := b.Cursor()
 
-		// Seek to the first key with this relationship ID prefix
 		prefix := []byte(id + ":")
 		for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
-			var r Relationship
+			var r core.Relationship
 			if err := json.Unmarshal(v, &r); err != nil {
 				return fmt.Errorf("failed to unmarshal relationship: %w", err)
 			}
 
-			// Find the version that is currently valid (ValidTo == nil)
 			if r.ValidTo == nil {
 				rel = &r
 				return nil
@@ -271,15 +249,15 @@ func (s *BoltStore) GetRelationship(id string) (*Relationship, error) {
 }
 
 // GetAllRelationships retrieves all relationships from the database
-func (s *BoltStore) GetAllRelationships() ([]*Relationship, error) {
-	var rels []*Relationship
+func (s *BoltStore) GetAllRelationships() ([]*core.Relationship, error) {
+	var rels []*core.Relationship
 
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(relationshipsBucket)
 		c := b.Cursor()
 
 		for k, v := c.First(); k != nil; k, v = c.Next() {
-			var rel Relationship
+			var rel core.Relationship
 			if err := json.Unmarshal(v, &rel); err != nil {
 				return fmt.Errorf("failed to unmarshal relationship: %w", err)
 			}
@@ -298,18 +276,16 @@ func (s *BoltStore) DeleteRelationship(id string, deletedAt time.Time) error {
 		b := tx.Bucket(relationshipsBucket)
 		c := b.Cursor()
 
-		// Find the current valid version of this relationship
 		prefix := []byte(id + ":")
 		var foundKey []byte
-		var rel Relationship
+		var rel core.Relationship
 
 		for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
-			var r Relationship
+			var r core.Relationship
 			if err := json.Unmarshal(v, &r); err != nil {
 				return fmt.Errorf("failed to unmarshal relationship: %w", err)
 			}
 
-			// Find the version that is currently valid (ValidTo == nil)
 			if r.ValidTo == nil {
 				foundKey = k
 				rel = r
@@ -332,8 +308,8 @@ func (s *BoltStore) DeleteRelationship(id string, deletedAt time.Time) error {
 	})
 }
 
-// SaveEmbedding persists a node embedding (all versions)
-func (s *BoltStore) SaveEmbedding(nodeID string, embeddings []*Embedding) error {
+// SaveEmbedding persists node embeddings
+func (s *BoltStore) SaveEmbedding(nodeID string, embeddings []*embedding.Embedding) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(embeddingsBucket)
 
@@ -347,8 +323,8 @@ func (s *BoltStore) SaveEmbedding(nodeID string, embeddings []*Embedding) error 
 }
 
 // GetEmbedding retrieves all embedding versions for a node
-func (s *BoltStore) GetEmbedding(nodeID string) ([]*Embedding, error) {
-	var embeddings []*Embedding
+func (s *BoltStore) GetEmbedding(nodeID string) ([]*embedding.Embedding, error) {
+	var embeddings []*embedding.Embedding
 
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(embeddingsBucket)
@@ -369,15 +345,15 @@ func (s *BoltStore) GetEmbedding(nodeID string) ([]*Embedding, error) {
 }
 
 // GetAllEmbeddings retrieves all embeddings
-func (s *BoltStore) GetAllEmbeddings() (map[string][]*Embedding, error) {
-	embeddings := make(map[string][]*Embedding)
+func (s *BoltStore) GetAllEmbeddings() (map[string][]*embedding.Embedding, error) {
+	embeddings := make(map[string][]*embedding.Embedding)
 
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(embeddingsBucket)
 		c := b.Cursor()
 
 		for k, v := c.First(); k != nil; k, v = c.Next() {
-			var embs []*Embedding
+			var embs []*embedding.Embedding
 			if err := json.Unmarshal(v, &embs); err != nil {
 				return fmt.Errorf("failed to unmarshal embeddings: %w", err)
 			}
@@ -396,14 +372,12 @@ func (s *BoltStore) Close() error {
 }
 
 // Stats returns database statistics
-func (s *BoltStore) Stats() (*bolt.Stats, error) {
+func (s *BoltStore) Stats() *bolt.Stats {
 	stats := s.db.Stats()
-	return &stats, nil
+	return &stats
 }
 
-// ========== Transaction Support ==========
-
-// Tx wraps a bbolt transaction with graph-aware operations
+// Tx wraps a bbolt transaction
 type Tx struct {
 	btx       *bolt.Tx
 	writable  bool
@@ -411,7 +385,6 @@ type Tx struct {
 }
 
 // BeginTx starts a new transaction
-// writable=true for read-write, false for read-only
 func (s *BoltStore) BeginTx(writable bool) (*Tx, error) {
 	btx, err := s.db.Begin(writable)
 	if err != nil {
@@ -432,15 +405,14 @@ func (tx *Tx) Commit() error {
 // Rollback aborts the transaction
 func (tx *Tx) Rollback() error {
 	if tx.committed {
-		return nil // Already committed, nothing to rollback
+		return nil
 	}
 	tx.committed = true
 	return tx.btx.Rollback()
 }
 
 // SaveNode persists a node within a transaction
-// Uses composite key nodeID:validFromNano to support multiple versions
-func (tx *Tx) SaveNode(node *Node) error {
+func (tx *Tx) SaveNode(node *core.Node) error {
 	if !tx.writable {
 		return fmt.Errorf("cannot write in read-only transaction")
 	}
@@ -455,13 +427,11 @@ func (tx *Tx) SaveNode(node *Node) error {
 		return fmt.Errorf("failed to marshal node: %w", err)
 	}
 
-	// Store node by composite key: ID:ValidFrom.UnixNano()
 	key := fmt.Sprintf("%s:%d", node.ID, node.ValidFrom.UnixNano())
 	if err := b.Put([]byte(key), data); err != nil {
 		return fmt.Errorf("failed to save node: %w", err)
 	}
 
-	// Update label index
 	lb := tx.btx.Bucket(labelIndexBucket)
 	if lb != nil {
 		for _, label := range node.Labels {
@@ -475,8 +445,8 @@ func (tx *Tx) SaveNode(node *Node) error {
 	return nil
 }
 
-// GetNode retrieves the current (latest valid) version of a node within a transaction
-func (tx *Tx) GetNode(id string) (*Node, error) {
+// GetNode retrieves a node within a transaction
+func (tx *Tx) GetNode(id string) (*core.Node, error) {
 	b := tx.btx.Bucket(nodesBucket)
 	if b == nil {
 		return nil, fmt.Errorf("nodes bucket not found")
@@ -486,12 +456,11 @@ func (tx *Tx) GetNode(id string) (*Node, error) {
 	prefix := []byte(id + ":")
 
 	for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
-		var n Node
+		var n core.Node
 		if err := json.Unmarshal(v, &n); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal node: %w", err)
 		}
 
-		// Find the version that is currently valid (ValidTo == nil)
 		if n.ValidTo == nil {
 			return &n, nil
 		}
@@ -514,10 +483,10 @@ func (tx *Tx) DeleteNode(id string, deletedAt time.Time) error {
 	c := b.Cursor()
 	prefix := []byte(id + ":")
 	var foundKey []byte
-	var node Node
+	var node core.Node
 
 	for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
-		var n Node
+		var n core.Node
 		if err := json.Unmarshal(v, &n); err != nil {
 			return fmt.Errorf("failed to unmarshal node: %w", err)
 		}
@@ -544,8 +513,7 @@ func (tx *Tx) DeleteNode(id string, deletedAt time.Time) error {
 }
 
 // SaveRelationship persists a relationship within a transaction
-// Uses composite key relID:validFromNano to support multiple versions
-func (tx *Tx) SaveRelationship(rel *Relationship) error {
+func (tx *Tx) SaveRelationship(rel *core.Relationship) error {
 	if !tx.writable {
 		return fmt.Errorf("cannot write in read-only transaction")
 	}
@@ -564,8 +532,8 @@ func (tx *Tx) SaveRelationship(rel *Relationship) error {
 	return b.Put([]byte(key), data)
 }
 
-// GetRelationship retrieves the current (latest valid) version of a relationship within a transaction
-func (tx *Tx) GetRelationship(id string) (*Relationship, error) {
+// GetRelationship retrieves a relationship within a transaction
+func (tx *Tx) GetRelationship(id string) (*core.Relationship, error) {
 	b := tx.btx.Bucket(relationshipsBucket)
 	if b == nil {
 		return nil, fmt.Errorf("relationships bucket not found")
@@ -575,7 +543,7 @@ func (tx *Tx) GetRelationship(id string) (*Relationship, error) {
 	prefix := []byte(id + ":")
 
 	for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
-		var r Relationship
+		var r core.Relationship
 		if err := json.Unmarshal(v, &r); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal relationship: %w", err)
 		}
@@ -602,10 +570,10 @@ func (tx *Tx) DeleteRelationship(id string, deletedAt time.Time) error {
 	c := b.Cursor()
 	prefix := []byte(id + ":")
 	var foundKey []byte
-	var rel Relationship
+	var rel core.Relationship
 
 	for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
-		var r Relationship
+		var r core.Relationship
 		if err := json.Unmarshal(v, &r); err != nil {
 			return fmt.Errorf("failed to unmarshal relationship: %w", err)
 		}
@@ -628,21 +596,21 @@ func (tx *Tx) DeleteRelationship(id string, deletedAt time.Time) error {
 		return fmt.Errorf("failed to marshal relationship: %w", err)
 	}
 
-	return b.Put([]byte(id), updatedData)
+	return b.Put(foundKey, updatedData)
 }
 
 // GetAllNodes retrieves all nodes within a transaction
-func (tx *Tx) GetAllNodes() ([]*Node, error) {
+func (tx *Tx) GetAllNodes() ([]*core.Node, error) {
 	b := tx.btx.Bucket(nodesBucket)
 	if b == nil {
 		return nil, fmt.Errorf("nodes bucket not found")
 	}
 
-	var nodes []*Node
+	var nodes []*core.Node
 	c := b.Cursor()
 
 	for k, v := c.First(); k != nil; k, v = c.Next() {
-		var node Node
+		var node core.Node
 		if err := json.Unmarshal(v, &node); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal node: %w", err)
 		}
@@ -653,17 +621,17 @@ func (tx *Tx) GetAllNodes() ([]*Node, error) {
 }
 
 // GetAllRelationships retrieves all relationships within a transaction
-func (tx *Tx) GetAllRelationships() ([]*Relationship, error) {
+func (tx *Tx) GetAllRelationships() ([]*core.Relationship, error) {
 	b := tx.btx.Bucket(relationshipsBucket)
 	if b == nil {
 		return nil, fmt.Errorf("relationships bucket not found")
 	}
 
-	var rels []*Relationship
+	var rels []*core.Relationship
 	c := b.Cursor()
 
 	for k, v := c.First(); k != nil; k, v = c.Next() {
-		var rel Relationship
+		var rel core.Relationship
 		if err := json.Unmarshal(v, &rel); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal relationship: %w", err)
 		}
@@ -674,7 +642,7 @@ func (tx *Tx) GetAllRelationships() ([]*Relationship, error) {
 }
 
 // SaveEmbedding persists embeddings within a transaction
-func (tx *Tx) SaveEmbedding(nodeID string, embeddings []*Embedding) error {
+func (tx *Tx) SaveEmbedding(nodeID string, embeddings []*embedding.Embedding) error {
 	if !tx.writable {
 		return fmt.Errorf("cannot write in read-only transaction")
 	}
