@@ -127,16 +127,13 @@ func ParseDSN(dsn string) (*Config, error) {
 // Open creates a new graph database from the config
 // Returns GraphDB interface - defaults to disk-first mode (low RAM, unlimited size)
 func (cfg *Config) Open() (GraphDB, error) {
-	// TEMPORARY: Force in-memory for debugging
-	return NewGraph(), nil
+	if cfg.DataDir == "" {
+		// In-memory only (no persistence)
+		return NewGraph(), nil
+	}
 
-	// if cfg.DataDir == "" {
-	// 	// In-memory only (no persistence)
-	// 	return NewGraph(), nil
-	// }
-
-	// // Default: disk-first mode with bbolt (low RAM, unlimited size)
-	// return NewDiskGraph(cfg.DataDir, 10000) // 10k node cache by default
+	// Default: disk-first mode with bbolt (low RAM, unlimited size)
+	return NewDiskGraph(cfg.DataDir, 10000) // 10k node cache by default
 }
 
 // RequiresAuth returns true if authentication is configured
