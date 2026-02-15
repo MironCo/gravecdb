@@ -24,15 +24,14 @@ type VersionedSearchResult = embedding.VersionedSearchResult
 
 // Graph represents the in-memory graph database with optional disk persistence
 type Graph struct {
-	nodes              map[string]*Node
-	nodeVersions       map[string][]*Node          // All versions of each node for temporal queries
-	relationships      map[string]*Relationship
-	relationshipVersions map[string][]*Relationship // All versions of each relationship for temporal queries
-	nodesByLabel       map[string]map[string]*Node // label -> nodeID -> Node
-	embeddings         *embedding.Store            // Vector embeddings for semantic search
-	mu                 sync.RWMutex
-	wal                *WAL              // Write-Ahead Log for persistence (nil if persistence disabled)
-	boltStore          *storage.BoltStore // bbolt storage backend (nil if using WAL or no persistence)
+	nodes                map[string]*Node
+	nodeVersions         map[string][]*Node            // All versions of each node for temporal queries
+	relationships        map[string]*Relationship
+	relationshipVersions map[string][]*Relationship    // All versions of each relationship for temporal queries
+	nodesByLabel         map[string]map[string]*Node   // label -> nodeID -> Node
+	embeddings           *embedding.Store              // Vector embeddings for semantic search
+	mu                   sync.RWMutex
+	boltStore            *storage.BoltStore            // bbolt storage backend (nil if no persistence)
 }
 
 // NewGraph creates a new graph database instance without persistence
@@ -45,92 +44,6 @@ func NewGraph() *Graph {
 		nodesByLabel:         make(map[string]map[string]*Node),
 		embeddings:           embedding.NewStore(),
 	}
-}
-
-// NewGraphWithPersistence creates a new graph database with disk persistence
-// dataDir: directory where the database files (WAL and snapshots) will be stored
-// If a previous database exists in dataDir, it will be recovered automatically
-// Uses default settings (balanced performance and durability)
-func NewGraphWithPersistence(dataDir string) (*Graph, error) {
-	// Create the WAL instance with default settings
-	wal, err := NewWAL(dataDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create WAL: %w", err)
-	}
-
-	g := &Graph{
-		nodes:                make(map[string]*Node),
-		nodeVersions:         make(map[string][]*Node),
-		relationships:        make(map[string]*Relationship),
-		relationshipVersions: make(map[string][]*Relationship),
-		nodesByLabel:         make(map[string]map[string]*Node),
-		embeddings:           embedding.NewStore(),
-		wal:                  wal,
-	}
-
-	// Attempt to recover from disk
-	if err := g.recover(); err != nil {
-		return nil, fmt.Errorf("failed to recover graph: %w", err)
-	}
-
-	return g, nil
-}
-
-// NewGraphWithMaxDurability creates a graph with maximum durability (slow writes)
-// Every write is immediately synced to disk - safest but slowest option
-func NewGraphWithMaxDurability(dataDir string) (*Graph, error) {
-	wal, err := NewWALWithOptions(dataDir, WALOptions{
-		BufferSize: 1,
-		SyncMode:   SyncEveryWrite,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create WAL: %w", err)
-	}
-
-	g := &Graph{
-		nodes:                make(map[string]*Node),
-		nodeVersions:         make(map[string][]*Node),
-		relationships:        make(map[string]*Relationship),
-		relationshipVersions: make(map[string][]*Relationship),
-		nodesByLabel:         make(map[string]map[string]*Node),
-		embeddings:           embedding.NewStore(),
-		wal:                  wal,
-	}
-
-	if err := g.recover(); err != nil {
-		return nil, fmt.Errorf("failed to recover graph: %w", err)
-	}
-
-	return g, nil
-}
-
-// NewGraphWithMaxPerformance creates a graph optimized for write performance
-// Batches writes and syncs periodically - fastest but may lose recent writes on crash
-func NewGraphWithMaxPerformance(dataDir string) (*Graph, error) {
-	wal, err := NewWALWithOptions(dataDir, WALOptions{
-		BufferSize:    1000, // Large buffer
-		SyncMode:      SyncPeriodic,
-		FlushInterval: 1 * time.Second, // Sync every second
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create WAL: %w", err)
-	}
-
-	g := &Graph{
-		nodes:                make(map[string]*Node),
-		nodeVersions:         make(map[string][]*Node),
-		relationships:        make(map[string]*Relationship),
-		relationshipVersions: make(map[string][]*Relationship),
-		nodesByLabel:         make(map[string]map[string]*Node),
-		embeddings:           embedding.NewStore(),
-		wal:                  wal,
-	}
-
-	if err := g.recover(); err != nil {
-		return nil, fmt.Errorf("failed to recover graph: %w", err)
-	}
-
-	return g, nil
 }
 
 // NewGraphWithBolt creates a new graph database with bbolt persistence
@@ -212,200 +125,9 @@ func (g *Graph) loadFromBolt() error {
 	return nil
 }
 
-// recover rebuilds the graph state from disk
-// 1. Load the latest snapshot (if exists)
-// 2. Replay all operations from the WAL that occurred after the snapshot
-func (g *Graph) recover() error {
-	if g.wal == nil {
-		return nil // No persistence enabled
-	}
-
-	// Step 1: Load the latest snapshot
-	snapshot, err := g.wal.LoadSnapshot()
-	if err != nil {
-		return fmt.Errorf("failed to load snapshot: %w", err)
-	}
-
-	if snapshot != nil {
-		// Restore the graph state from the snapshot
-		g.nodes = snapshot.Nodes
-		g.relationships = snapshot.Relationships
-		g.nodesByLabel = snapshot.NodesByLabel
-	}
-
-	// Step 2: Replay operations from the WAL
-	// These are operations that occurred after the snapshot was created
-	operations, err := g.wal.ReadOperations()
-	if err != nil {
-		return fmt.Errorf("failed to read WAL operations: %w", err)
-	}
-
-	// Apply each operation in order to bring the graph to the latest state
-	for _, op := range operations {
-		if err := g.replayOperation(op); err != nil {
-			return fmt.Errorf("failed to replay operation: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// replayOperation applies a logged operation to the graph
-// Used during recovery to rebuild state from the WAL
-func (g *Graph) replayOperation(op Operation) error {
-	switch op.Type {
-	case "CREATE_NODE":
-		// Recreate a node with its original ID and labels
-		nodeID := op.Data["id"].(string)
-		labelsInterface := op.Data["labels"].([]interface{})
-		labels := make([]string, len(labelsInterface))
-		for i, l := range labelsInterface {
-			labels[i] = l.(string)
-		}
-
-		node := &Node{
-			ID:         nodeID,
-			Labels:     labels,
-			Properties: make(map[string]interface{}),
-			ValidFrom:  op.Timestamp, // Use the operation timestamp
-			ValidTo:    nil,
-		}
-		g.nodes[nodeID] = node
-
-		// Rebuild label index
-		for _, label := range labels {
-			if g.nodesByLabel[label] == nil {
-				g.nodesByLabel[label] = make(map[string]*Node)
-			}
-			g.nodesByLabel[label][nodeID] = node
-		}
-
-	case "CREATE_RELATIONSHIP":
-		// Recreate a relationship with its original ID
-		relID := op.Data["id"].(string)
-		relType := op.Data["type"].(string)
-		fromNodeID := op.Data["from"].(string)
-		toNodeID := op.Data["to"].(string)
-
-		rel := &Relationship{
-			ID:         relID,
-			Type:       relType,
-			FromNodeID: fromNodeID,
-			ToNodeID:   toNodeID,
-			Properties: make(map[string]interface{}),
-			ValidFrom:  op.Timestamp, // Use the operation timestamp
-			ValidTo:    nil,
-		}
-		g.relationships[relID] = rel
-
-	case "SET_NODE_PROPERTY":
-		// Set a property on a node
-		nodeID := op.Data["node_id"].(string)
-		key := op.Data["key"].(string)
-		value := op.Data["value"]
-
-		if node, exists := g.nodes[nodeID]; exists {
-			node.Properties[key] = value
-		}
-
-	case "DELETE_NODE_PROPERTY":
-		// Delete a property from a node
-		nodeID := op.Data["node_id"].(string)
-		key := op.Data["key"].(string)
-
-		if node, exists := g.nodes[nodeID]; exists {
-			delete(node.Properties, key)
-		}
-
-	case "SET_REL_PROPERTY":
-		// Set a property on a relationship
-		relID := op.Data["rel_id"].(string)
-		key := op.Data["key"].(string)
-		value := op.Data["value"]
-
-		if rel, exists := g.relationships[relID]; exists {
-			rel.Properties[key] = value
-		}
-
-	case "DELETE_REL_PROPERTY":
-		// Delete a property from a relationship
-		relID := op.Data["rel_id"].(string)
-		key := op.Data["key"].(string)
-
-		if rel, exists := g.relationships[relID]; exists {
-			delete(rel.Properties, key)
-		}
-
-	case "DELETE_NODE":
-		// Soft delete a node by setting ValidTo timestamp
-		nodeID := op.Data["node_id"].(string)
-		if node, exists := g.nodes[nodeID]; exists {
-			// Parse the deleted_at timestamp from the operation
-			if deletedAtStr, ok := op.Data["deleted_at"].(string); ok {
-				deletedAt, err := time.Parse(time.RFC3339Nano, deletedAtStr)
-				if err == nil {
-					node.ValidTo = &deletedAt
-				}
-			} else if deletedAt, ok := op.Data["deleted_at"].(time.Time); ok {
-				node.ValidTo = &deletedAt
-			}
-		}
-
-	case "DELETE_RELATIONSHIP":
-		// Soft delete a relationship by setting ValidTo timestamp
-		relID := op.Data["rel_id"].(string)
-		if rel, exists := g.relationships[relID]; exists {
-			// Parse the deleted_at timestamp from the operation
-			if deletedAtStr, ok := op.Data["deleted_at"].(string); ok {
-				deletedAt, err := time.Parse(time.RFC3339Nano, deletedAtStr)
-				if err == nil {
-					rel.ValidTo = &deletedAt
-				}
-			} else if deletedAt, ok := op.Data["deleted_at"].(time.Time); ok {
-				rel.ValidTo = &deletedAt
-			}
-		}
-	}
-
-	return nil
-}
-
-// Snapshot creates a snapshot of the current graph state and truncates the WAL
-// This should be called periodically to avoid the WAL growing too large
-func (g *Graph) Snapshot() error {
-	if g.wal == nil {
-		return nil // No persistence enabled
-	}
-
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-
-	// Create a snapshot of the current state
-	snapshot := &Snapshot{
-		Nodes:         g.nodes,
-		Relationships: g.relationships,
-		NodesByLabel:  g.nodesByLabel,
-	}
-
-	// Write the snapshot to disk
-	if err := g.wal.CreateSnapshot(snapshot); err != nil {
-		return fmt.Errorf("failed to create snapshot: %w", err)
-	}
-
-	// Clear the WAL since all operations are now in the snapshot
-	if err := g.wal.TruncateLog(); err != nil {
-		return fmt.Errorf("failed to truncate WAL: %w", err)
-	}
-
-	return nil
-}
-
-// Close flushes any pending writes and closes the database
+// Close closes the database
 // Should be called when shutting down to ensure all data is saved
 func (g *Graph) Close() error {
-	if g.wal != nil {
-		return g.wal.Close()
-	}
 	if g.boltStore != nil {
 		return g.boltStore.Close()
 	}
@@ -413,7 +135,7 @@ func (g *Graph) Close() error {
 }
 
 // CreateNode adds a node to the graph
-// If persistence is enabled, the operation is logged to the WAL before being applied
+// If persistence is enabled, the operation is persisted to bbolt
 func (g *Graph) CreateNode(labels ...string) *Node {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -424,23 +146,6 @@ func (g *Graph) CreateNode(labels ...string) *Node {
 // Caller must already hold g.mu.Lock()
 func (g *Graph) createNodeUnlocked(labels ...string) *Node {
 	node := NewNode(labels...)
-
-	// Log the operation to the WAL before applying it
-	// This ensures durability - if we crash after writing to WAL but before
-	// completing the in-memory update, we can replay the operation on recovery
-	if g.wal != nil {
-		op := Operation{
-			Type: "CREATE_NODE",
-			Data: map[string]interface{}{
-				"id":     node.ID,
-				"labels": labels,
-			},
-		}
-		if err := g.wal.WriteOperation(op); err != nil {
-			// In a production system, we'd handle this error more gracefully
-			panic(fmt.Sprintf("failed to write operation to WAL: %v", err))
-		}
-	}
 
 	// Apply the operation to the in-memory graph
 	g.nodes[node.ID] = node
@@ -492,7 +197,7 @@ func (g *Graph) GetNode(id string) (*Node, error) {
 }
 
 // CreateRelationship creates a relationship between two nodes
-// If persistence is enabled, the operation is logged to the WAL before being applied
+// If persistence is enabled, the operation is persisted to bbolt
 func (g *Graph) CreateRelationship(relType string, fromNodeID, toNodeID string) (*Relationship, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -511,22 +216,6 @@ func (g *Graph) createRelationshipUnlocked(relType string, fromNodeID, toNodeID 
 	}
 
 	rel := NewRelationship(relType, fromNodeID, toNodeID)
-
-	// Log the operation to the WAL
-	if g.wal != nil {
-		op := Operation{
-			Type: "CREATE_RELATIONSHIP",
-			Data: map[string]interface{}{
-				"id":   rel.ID,
-				"type": relType,
-				"from": fromNodeID,
-				"to":   toNodeID,
-			},
-		}
-		if err := g.wal.WriteOperation(op); err != nil {
-			return nil, fmt.Errorf("failed to write operation to WAL: %w", err)
-		}
-	}
 
 	// Apply the operation to the in-memory graph
 	g.relationships[rel.ID] = rel
@@ -639,7 +328,7 @@ func (g *Graph) getRelationshipsForNodeUnlocked(nodeID string) []*Relationship {
 // DeleteNode marks a node as deleted by setting its ValidTo timestamp
 // This is a soft delete - the node remains in the graph for historical queries
 // All relationships connected to this node are also marked as deleted
-// If persistence is enabled, the operation is logged to the WAL before being applied
+// If persistence is enabled, the operation is persisted to bbolt
 func (g *Graph) DeleteNode(nodeID string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -660,20 +349,6 @@ func (g *Graph) deleteNodeUnlocked(nodeID string) error {
 	}
 
 	now := time.Now()
-
-	// Log the operation to the WAL
-	if g.wal != nil {
-		op := Operation{
-			Type: "DELETE_NODE",
-			Data: map[string]interface{}{
-				"node_id":    nodeID,
-				"deleted_at": now,
-			},
-		}
-		if err := g.wal.WriteOperation(op); err != nil {
-			return fmt.Errorf("failed to write operation to WAL: %w", err)
-		}
-	}
 
 	// Soft delete: set ValidTo timestamp instead of removing from map
 	node.ValidTo = &now
@@ -703,7 +378,7 @@ func (g *Graph) deleteNodeUnlocked(nodeID string) error {
 
 // DeleteRelationship marks a relationship as deleted by setting its ValidTo timestamp
 // This is a soft delete - the relationship remains in the graph for historical queries
-// If persistence is enabled, the operation is logged to the WAL before being applied
+// If persistence is enabled, the operation is persisted to bbolt
 func (g *Graph) DeleteRelationship(relID string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -725,20 +400,6 @@ func (g *Graph) deleteRelationshipUnlocked(relID string) error {
 
 	now := time.Now()
 
-	// Log the operation to the WAL
-	if g.wal != nil {
-		op := Operation{
-			Type: "DELETE_RELATIONSHIP",
-			Data: map[string]interface{}{
-				"rel_id":     relID,
-				"deleted_at": now,
-			},
-		}
-		if err := g.wal.WriteOperation(op); err != nil {
-			return fmt.Errorf("failed to write operation to WAL: %w", err)
-		}
-	}
-
 	// Soft delete: set ValidTo timestamp instead of removing from map
 	rel.ValidTo = &now
 
@@ -753,7 +414,7 @@ func (g *Graph) deleteRelationshipUnlocked(relID string) error {
 }
 
 // SetNodeProperty sets a property on a node
-// This is a helper method that logs the operation to the WAL if persistence is enabled
+// This is a helper method that persists the operation to bbolt if enabled
 // Use this instead of calling node.SetProperty directly when persistence is needed
 func (g *Graph) SetNodeProperty(nodeID, key string, value interface{}) error {
 	g.mu.Lock()
@@ -796,23 +457,6 @@ func (g *Graph) setNodePropertyUnlocked(nodeID, key string, value interface{}) e
 
 	// Apply the new value
 	newNode.Properties[key] = value
-
-	// Log the operation to the WAL
-	if g.wal != nil {
-		op := Operation{
-			Type: "SET_NODE_PROPERTY",
-			Data: map[string]interface{}{
-				"node_id": nodeID,
-				"key":     key,
-				"value":   value,
-			},
-		}
-		if err := g.wal.WriteOperation(op); err != nil {
-			// Rollback the version change
-			currentNode.ValidTo = nil
-			return fmt.Errorf("failed to write operation to WAL: %w", err)
-		}
-	}
 
 	// Update the current node pointer
 	g.nodes[nodeID] = newNode
@@ -885,22 +529,6 @@ func (g *Graph) deleteNodePropertyUnlocked(nodeID, key string) error {
 		}
 	}
 
-	// Log the operation to the WAL
-	if g.wal != nil {
-		op := Operation{
-			Type: "DELETE_NODE_PROPERTY",
-			Data: map[string]interface{}{
-				"node_id": nodeID,
-				"key":     key,
-			},
-		}
-		if err := g.wal.WriteOperation(op); err != nil {
-			// Rollback the version change
-			currentNode.ValidTo = nil
-			return fmt.Errorf("failed to write operation to WAL: %w", err)
-		}
-	}
-
 	// Update the current node pointer
 	g.nodes[nodeID] = newNode
 
@@ -930,7 +558,7 @@ func (g *Graph) deleteNodePropertyUnlocked(nodeID, key string) error {
 }
 
 // SetRelationshipProperty sets a property on a relationship
-// This is a helper method that logs the operation to the WAL if persistence is enabled
+// This is a helper method that persists the operation to bbolt if enabled
 // Use this instead of calling relationship.SetProperty directly when persistence is needed
 func (g *Graph) SetRelationshipProperty(relID, key string, value interface{}) error {
 	g.mu.Lock()
@@ -974,23 +602,6 @@ func (g *Graph) setRelationshipPropertyUnlocked(relID, key string, value interfa
 
 	// Apply the new value
 	newRel.Properties[key] = value
-
-	// Log the operation to the WAL
-	if g.wal != nil {
-		op := Operation{
-			Type: "SET_REL_PROPERTY",
-			Data: map[string]interface{}{
-				"rel_id": relID,
-				"key":    key,
-				"value":  value,
-			},
-		}
-		if err := g.wal.WriteOperation(op); err != nil {
-			// Rollback the version change
-			currentRel.ValidTo = nil
-			return fmt.Errorf("failed to write operation to WAL: %w", err)
-		}
-	}
 
 	// Update the current relationship pointer
 	g.relationships[relID] = newRel
@@ -1054,22 +665,6 @@ func (g *Graph) deleteRelationshipPropertyUnlocked(relID, key string) error {
 	for k, v := range currentRel.Properties {
 		if k != key {
 			newRel.Properties[k] = v
-		}
-	}
-
-	// Log the operation to the WAL
-	if g.wal != nil {
-		op := Operation{
-			Type: "DELETE_REL_PROPERTY",
-			Data: map[string]interface{}{
-				"rel_id": relID,
-				"key":    key,
-			},
-		}
-		if err := g.wal.WriteOperation(op); err != nil {
-			// Rollback the version change
-			currentRel.ValidTo = nil
-			return fmt.Errorf("failed to write operation to WAL: %w", err)
 		}
 	}
 

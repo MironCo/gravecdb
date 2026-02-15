@@ -11,7 +11,7 @@ func main() {
 	fmt.Println("=== Cypher-like Query Language Demo ===\n")
 
 	// Create a graph with persistence
-	db, err := graph.NewGraphWithPersistence("./data")
+	db, err := graph.NewGraphWithBolt("./data")
 	if err != nil {
 		fmt.Printf("Error creating database: %v\n", err)
 		return
@@ -135,14 +135,6 @@ func main() {
 	// Performance benchmark
 	fmt.Println("\n=== Performance Benchmark ===\n")
 	runPerformanceBenchmark(db)
-
-	// Create a snapshot
-	fmt.Println("\n=== Creating Snapshot ===")
-	if err := db.Snapshot(); err != nil {
-		fmt.Printf("Error creating snapshot: %v\n", err)
-	} else {
-		fmt.Println("Snapshot created successfully!")
-	}
 }
 
 func setupDemoDataViaQueries(db *graph.Graph) {
