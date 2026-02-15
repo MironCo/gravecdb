@@ -28,14 +28,14 @@ var (
 // Server is a Bolt protocol server
 type Server struct {
 	listener net.Listener
-	db       graph.GraphDB
+	db       *graph.DiskGraph
 	addr     string
 	mu       sync.RWMutex
 	running  bool
 }
 
 // NewServer creates a new Bolt server
-func NewServer(addr string, db graph.GraphDB) *Server {
+func NewServer(addr string, db *graph.DiskGraph) *Server {
 	return &Server{
 		addr: addr,
 		db:   db,
@@ -89,7 +89,7 @@ func (s *Server) Stop() error {
 // Connection represents a client connection
 type Connection struct {
 	conn    net.Conn
-	db      graph.GraphDB
+	db      *graph.DiskGraph
 	encoder *packstream.Encoder
 	decoder *packstream.Decoder
 	version []byte
@@ -380,20 +380,14 @@ func (c *Connection) handleBegin() error {
 		return c.sendFailure("Neo.ClientError.Transaction.TransactionStartFailed", "Already in a transaction")
 	}
 
-	// Check if the database supports transactions
-	if txDB, ok := c.db.(graph.TransactionalGraphDB); ok {
-		tx, err := txDB.BeginTransaction()
-		if err != nil {
-			return c.sendFailure("Neo.ClientError.Transaction.TransactionStartFailed", err.Error())
-		}
-		c.tx = tx
-		c.inTransaction = true
-		fmt.Printf("Transaction started\n")
-	} else {
-		// Database doesn't support transactions - use auto-commit mode
-		c.inTransaction = true
-		fmt.Printf("Transaction started (auto-commit mode - no real transaction support)\n")
+	// Start transaction
+	tx, err := c.db.BeginTransaction()
+	if err != nil {
+		return c.sendFailure("Neo.ClientError.Transaction.TransactionStartFailed", err.Error())
 	}
+	c.tx = tx
+	c.inTransaction = true
+	fmt.Printf("Transaction started\n")
 
 	return c.sendSuccess(map[string]interface{}{})
 }

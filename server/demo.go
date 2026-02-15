@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/MironCo/gravecdb/client"
@@ -187,7 +190,33 @@ func loadDemoData() {
 		}
 		time.Sleep(200 * time.Millisecond)
 
-		// Alice gets promoted - delete old relationship and create new one
+		// Alice gets promoted - update her role property and job relationship
+		// Get Alice's ID first
+		aliceResult, err := conn.Query(`MATCH (alice:Person {name: "Alice"}) RETURN alice`)
+		if err == nil && len(aliceResult.Rows) > 0 {
+			if aliceNode, ok := aliceResult.Rows[0]["alice"].(map[string]interface{}); ok {
+				if aliceID, ok := aliceNode["id"].(string); ok {
+					// Update role property via HTTP API
+					updatePayload := map[string]interface{}{
+						"key":   "role",
+						"value": "senior engineer",
+					}
+					payloadBytes, _ := json.Marshal(updatePayload)
+					req, _ := http.NewRequest("PUT",
+						fmt.Sprintf("http://localhost:%d/api/nodes/%s/properties", serverConfig.Port, aliceID),
+						bytes.NewBuffer(payloadBytes))
+					req.Header.Set("Content-Type", "application/json")
+					resp, err := http.DefaultClient.Do(req)
+					if err != nil {
+						log.Printf("Failed to update Alice's role: %v", err)
+					} else {
+						resp.Body.Close()
+					}
+				}
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+
 		_, err = conn.Query(`MATCH (alice:Person {name: "Alice"})-[r:WORKS_AT {title: "Junior Engineer"}]->(:Company {name: "TechCorp"}) DELETE r`)
 		if err != nil {
 			log.Printf("Failed to delete Alice's old job: %v", err)
@@ -371,6 +400,32 @@ func loadDemoData() {
 		time.Sleep(200 * time.Millisecond)
 
 		// Alice gets another promotion!
+		// Get Alice's ID again
+		aliceResult, err = conn.Query(`MATCH (alice:Person {name: "Alice"}) RETURN alice`)
+		if err == nil && len(aliceResult.Rows) > 0 {
+			if aliceNode, ok := aliceResult.Rows[0]["alice"].(map[string]interface{}); ok {
+				if aliceID, ok := aliceNode["id"].(string); ok {
+					// Update role property via HTTP API
+					updatePayload := map[string]interface{}{
+						"key":   "role",
+						"value": "staff engineer",
+					}
+					payloadBytes, _ := json.Marshal(updatePayload)
+					req, _ := http.NewRequest("PUT",
+						fmt.Sprintf("http://localhost:%d/api/nodes/%s/properties", serverConfig.Port, aliceID),
+						bytes.NewBuffer(payloadBytes))
+					req.Header.Set("Content-Type", "application/json")
+					resp, err := http.DefaultClient.Do(req)
+					if err != nil {
+						log.Printf("Failed to update Alice's role to staff: %v", err)
+					} else {
+						resp.Body.Close()
+					}
+				}
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+
 		_, err = conn.Query(`MATCH (alice:Person {name: "Alice"})-[r:WORKS_AT]->(c:Company) DELETE r`)
 		if err != nil {
 			log.Printf("Failed to delete Alice's job for second promotion: %v", err)

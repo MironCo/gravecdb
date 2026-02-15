@@ -1,0 +1,65 @@
+package core
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// Node represents a vertex in the graph with labels and properties
+// Supports temporal queries through ValidFrom/ValidTo timestamps
+type Node struct {
+	ID         string                 `json:"id"`
+	Labels     []string               `json:"labels"`
+	Properties map[string]interface{} `json:"properties"`
+	ValidFrom  time.Time              `json:"validFrom"`
+	ValidTo    *time.Time             `json:"validTo"`
+}
+
+// NewNode creates a new node with the given labels
+func NewNode(labels ...string) *Node {
+	return &Node{
+		ID:         uuid.New().String(),
+		Labels:     labels,
+		Properties: make(map[string]interface{}),
+		ValidFrom:  time.Now(),
+		ValidTo:    nil,
+	}
+}
+
+// SetProperty sets a property on the node
+func (n *Node) SetProperty(key string, value interface{}) {
+	n.Properties[key] = value
+}
+
+// GetProperty retrieves a property from the node
+func (n *Node) GetProperty(key string) (interface{}, bool) {
+	val, exists := n.Properties[key]
+	return val, exists
+}
+
+// HasLabel checks if the node has a specific label
+func (n *Node) HasLabel(label string) bool {
+	for _, l := range n.Labels {
+		if l == label {
+			return true
+		}
+	}
+	return false
+}
+
+// IsValidAt checks if the node was valid at a specific point in time
+func (n *Node) IsValidAt(t time.Time) bool {
+	if t.Before(n.ValidFrom) {
+		return false
+	}
+	if n.ValidTo != nil && (t.After(*n.ValidTo) || t.Equal(*n.ValidTo)) {
+		return false
+	}
+	return true
+}
+
+// IsCurrentlyValid checks if the node is currently valid (not deleted)
+func (n *Node) IsCurrentlyValid() bool {
+	return n.ValidTo == nil
+}
