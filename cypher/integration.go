@@ -195,7 +195,12 @@ func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
 					for _, elem := range part.Elements {
 						if sp, ok := elem.(*ShortestPathPattern); ok {
 							gq.IsPathQuery = true
-							gq.MatchPattern.PathFunction = convertPathFunctionToGraph(sp)
+							pf := convertPathFunctionToGraph(sp)
+							// Use the PatternPart variable if ShortestPathPattern doesn't have one
+							if pf.Variable == "" && part.Variable != "" {
+								pf.Variable = part.Variable
+							}
+							gq.MatchPattern.PathFunction = pf
 						}
 					}
 				}
@@ -677,8 +682,12 @@ func convertRemoveToGraph(r *RemoveClause) *GraphRemoveClause {
 				ri.Variable = ident.Name
 			}
 			ri.Property = e.Property
+		case *LabelRemoval:
+			// REMOVE n:Label
+			ri.Variable = e.Variable
+			ri.Label = e.Label
 		case *Identifier:
-			// Could be label removal syntax - but typically it's n:Label
+			// Bare identifier (shouldn't typically happen)
 			ri.Variable = e.Name
 		}
 

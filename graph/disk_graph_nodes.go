@@ -355,3 +355,65 @@ func (g *DiskGraph) deleteNodePropertyUnlocked(nodeID, key string) error {
 	g.nodeCache.Add(nodeID, newNode)
 	return nil
 }
+
+// removeNodeLabelUnlocked removes a label from a node (caller must hold write lock)
+func (g *DiskGraph) removeNodeLabelUnlocked(nodeID, label string) error {
+	currentNode, err := g.boltStore.GetNode(nodeID)
+	if err != nil {
+		return err
+	}
+	if currentNode == nil {
+		return fmt.Errorf("node not found: %s", nodeID)
+	}
+
+	// Check if node has this label
+	hasLabel := false
+	for _, l := range currentNode.Labels {
+		if l == label {
+			hasLabel = true
+			break
+		}
+	}
+	if !hasLabel {
+		return nil // Nothing to remove
+	}
+
+	now := time.Now()
+	currentNode.ValidTo = &now
+
+	// Create new labels list without the removed label
+	var newLabels []string
+	for _, l := range currentNode.Labels {
+		if l != label {
+			newLabels = append(newLabels, l)
+		}
+	}
+
+	// Create new version without the label
+	newNode := &Node{
+		ID:         currentNode.ID,
+		Labels:     newLabels,
+		Properties: currentNode.Properties,
+		ValidFrom:  now,
+		ValidTo:    nil,
+	}
+
+	if err := g.boltStore.SaveNode(currentNode); err != nil {
+		return err
+	}
+	if err := g.boltStore.SaveNode(newNode); err != nil {
+		return err
+	}
+
+	// Update label index - remove from old label
+	ids := g.labelIndex[label]
+	for i, id := range ids {
+		if id == nodeID {
+			g.labelIndex[label] = append(ids[:i], ids[i+1:]...)
+			break
+		}
+	}
+
+	g.nodeCache.Add(nodeID, newNode)
+	return nil
+}

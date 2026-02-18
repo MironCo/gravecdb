@@ -260,9 +260,15 @@ func (c *Connection) handleRun(raw *packstream.RawStruct) error {
 	}
 
 	fmt.Printf("Query: %s\n", run.Statement)
+	if len(run.Parameters) > 0 {
+		fmt.Printf("Parameters: %v\n", run.Parameters)
+	}
+
+	// Substitute parameters in the query before parsing
+	statement := substituteParameters(run.Statement, run.Parameters)
 
 	// Parse and execute the query
-	query, err := graph.ParseQuery(run.Statement)
+	query, err := graph.ParseQuery(statement)
 	if err != nil {
 		c.failed = true
 		return c.sendFailure("Neo.ClientError.Statement.SyntaxError", err.Error())
@@ -626,4 +632,125 @@ func readFull(r io.Reader, n int) ([]byte, error) {
 // Helper to write uint16 in big endian
 func writeUint16(w io.Writer, v uint16) error {
 	return binary.Write(w, binary.BigEndian, v)
+}
+
+// substituteParameters replaces $param placeholders with actual values from the parameters map
+// This provides parameter binding support for Bolt protocol queries
+func substituteParameters(statement string, params map[string]interface{}) string {
+	if len(params) == 0 {
+		return statement
+	}
+
+	result := statement
+	for key, value := range params {
+		// Replace both $key and {key} style parameters
+		placeholder1 := "$" + key
+		placeholder2 := "{" + key + "}"
+
+		replacement := formatParamValue(value)
+		result = replaceAll(result, placeholder1, replacement)
+		result = replaceAll(result, placeholder2, replacement)
+	}
+
+	return result
+}
+
+// replaceAll replaces all occurrences of old with new in s
+func replaceAll(s, old, new string) string {
+	result := s
+	for {
+		idx := indexOf(result, old)
+		if idx == -1 {
+			break
+		}
+		result = result[:idx] + new + result[idx+len(old):]
+	}
+	return result
+}
+
+// indexOf finds the index of substr in s, returns -1 if not found
+func indexOf(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
+}
+
+// formatParamValue converts a parameter value to its Cypher literal representation
+func formatParamValue(value interface{}) string {
+	if value == nil {
+		return "null"
+	}
+
+	switch v := value.(type) {
+	case string:
+		// Escape single quotes in strings and wrap in quotes
+		escaped := escapeString(v)
+		return "'" + escaped + "'"
+	case int:
+		return fmt.Sprintf("%d", v)
+	case int64:
+		return fmt.Sprintf("%d", v)
+	case float64:
+		return fmt.Sprintf("%v", v)
+	case float32:
+		return fmt.Sprintf("%v", v)
+	case bool:
+		if v {
+			return "true"
+		}
+		return "false"
+	case []interface{}:
+		// Format as list
+		parts := make([]string, len(v))
+		for i, elem := range v {
+			parts[i] = formatParamValue(elem)
+		}
+		return "[" + joinStrings(parts, ", ") + "]"
+	case map[string]interface{}:
+		// Format as map
+		parts := []string{}
+		for k, val := range v {
+			parts = append(parts, k+": "+formatParamValue(val))
+		}
+		return "{" + joinStrings(parts, ", ") + "}"
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+// escapeString escapes special characters in a string for Cypher
+func escapeString(s string) string {
+	result := ""
+	for _, c := range s {
+		switch c {
+		case '\'':
+			result += "\\'"
+		case '\\':
+			result += "\\\\"
+		case '\n':
+			result += "\\n"
+		case '\r':
+			result += "\\r"
+		case '\t':
+			result += "\\t"
+		default:
+			result += string(c)
+		}
+	}
+	return result
+}
+
+// joinStrings joins strings with a separator
+func joinStrings(strs []string, sep string) string {
+	if len(strs) == 0 {
+		return ""
+	}
+	result := strs[0]
+	for i := 1; i < len(strs); i++ {
+		result += sep + strs[i]
+	}
+	return result
 }

@@ -936,7 +936,7 @@ func (g *DiskGraph) executeMergeQuery(query *Query) (*QueryResult, error) {
 	return result, nil
 }
 
-// executeRemoveQuery handles MATCH...REMOVE queries (remove properties from nodes/relationships)
+// executeRemoveQuery handles MATCH...REMOVE queries (remove properties or labels from nodes/relationships)
 func (g *DiskGraph) executeRemoveQuery(query *Query) (*QueryResult, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -963,8 +963,14 @@ func (g *DiskGraph) executeRemoveQuery(query *Query) (*QueryResult, error) {
 						removedCount++
 					}
 				}
+			} else if item.Label != "" {
+				// Remove label (only applicable to nodes)
+				if node, ok := entity.(*Node); ok {
+					if err := g.removeNodeLabelUnlocked(node.ID, item.Label); err == nil {
+						removedCount++
+					}
+				}
 			}
-			// Note: Label removal (item.Label) not implemented yet
 		}
 	}
 

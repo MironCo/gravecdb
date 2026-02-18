@@ -473,3 +473,12 @@ type Star struct{}
 
 func (s *Star) node()       {}
 func (s *Star) expression() {}
+
+// LabelRemoval represents label removal in REMOVE clause: n:Label
+type LabelRemoval struct {
+	Variable string
+	Label    string
+}
+
+func (l *LabelRemoval) node()       {}
+func (l *LabelRemoval) expression() {}

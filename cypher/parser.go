@@ -378,14 +378,16 @@ func (p *Parser) parseDeleteClause(detach bool) *DeleteClause {
 	return clause
 }
 
-// parseRemoveClause parses REMOVE items
+// parseRemoveClause parses REMOVE items (n.property or n:Label)
 func (p *Parser) parseRemoveClause() *RemoveClause {
 	clause := &RemoveClause{}
 	p.nextToken() // consume REMOVE
 
 	for {
-		expr := p.parseExpression(LOWEST)
-		clause.Items = append(clause.Items, expr)
+		item := p.parseRemoveItem()
+		if item != nil {
+			clause.Items = append(clause.Items, item)
+		}
 		if !p.curTokenIs(TOKEN_COMMA) {
 			break
 		}
@@ -393,6 +395,45 @@ func (p *Parser) parseRemoveClause() *RemoveClause {
 	}
 
 	return clause
+}
+
+// parseRemoveItem parses a single REMOVE item (n.property or n:Label)
+func (p *Parser) parseRemoveItem() Expression {
+	// First get the identifier
+	if !p.curTokenIs(TOKEN_IDENT) {
+		return p.parseExpression(LOWEST)
+	}
+
+	ident := &Identifier{Name: p.curToken.Literal}
+	p.nextToken()
+
+	// Check if followed by colon (label removal: n:Label)
+	if p.curTokenIs(TOKEN_COLON) {
+		p.nextToken() // consume :
+		if !p.curTokenIs(TOKEN_IDENT) {
+			p.addError("expected label name after :")
+			return nil
+		}
+		label := p.curToken.Literal
+		p.nextToken()
+		// Return a LabelRemoval expression
+		return &LabelRemoval{Variable: ident.Name, Label: label}
+	}
+
+	// Check if followed by dot (property removal: n.property)
+	if p.curTokenIs(TOKEN_DOT) {
+		p.nextToken() // consume .
+		if !p.curTokenIs(TOKEN_IDENT) {
+			p.addError("expected property name after .")
+			return nil
+		}
+		prop := p.curToken.Literal
+		p.nextToken()
+		return &PropertyAccess{Object: ident, Property: prop}
+	}
+
+	// Just a bare identifier
+	return ident
 }
 
 // parseUnwindClause parses UNWIND expr AS variable

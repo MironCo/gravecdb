@@ -297,6 +297,272 @@ def test_unwind_operations(session):
         print("  ✓ UNWIND works with strings")
 
 
+def test_parameter_binding(session):
+    """Test query parameter binding ($param style)."""
+    print("\n" + "=" * 60)
+    print("PARAMETER BINDING")
+    print("=" * 60)
+
+    # Create a test node
+    run_test(session, "Create node for param test",
+             "CREATE (p:ParamTest {name: 'ParamPerson', age: 42})",
+             expect_results=False)
+
+    # Test string parameter in node pattern {name: $name}
+    print("\n[Query with parameter in node pattern]")
+    print("-" * 50)
+    try:
+        result = session.run(
+            "MATCH (p:ParamTest {name: $name}) RETURN p.name, p.age",
+            name="ParamPerson"
+        )
+        records = list(result)
+        if records:
+            for record in records:
+                print(f"  → {dict(record)}")
+            if dict(records[0]).get('p.name') == 'ParamPerson':
+                print("  ✓ Parameter in node pattern works")
+        else:
+            print("  ✗ No results returned")
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+
+    # Test string parameter in WHERE clause
+    print("\n[Query with parameter in WHERE clause]")
+    print("-" * 50)
+    try:
+        result = session.run(
+            "MATCH (p:ParamTest) WHERE p.name = $name RETURN p.name, p.age",
+            name="ParamPerson"
+        )
+        records = list(result)
+        if records:
+            for record in records:
+                print(f"  → {dict(record)}")
+            if dict(records[0]).get('p.name') == 'ParamPerson':
+                print("  ✓ String parameter binding works")
+        else:
+            print("  ✗ No results returned")
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+
+    # Test numeric parameter
+    print("\n[Query with numeric parameter]")
+    print("-" * 50)
+    try:
+        result = session.run(
+            "MATCH (p:ParamTest) WHERE p.age = $age RETURN p.name, p.age",
+            age=42
+        )
+        records = list(result)
+        if records:
+            for record in records:
+                print(f"  → {dict(record)}")
+            if dict(records[0]).get('p.age') == 42:
+                print("  ✓ Numeric parameter binding works")
+        else:
+            print("  ✗ No results returned")
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+
+    # Test multiple parameters
+    print("\n[Query with multiple parameters]")
+    print("-" * 50)
+    try:
+        result = session.run(
+            "MATCH (p:ParamTest) WHERE p.name = $name AND p.age = $age RETURN p",
+            name="ParamPerson",
+            age=42
+        )
+        records = list(result)
+        if records:
+            for record in records:
+                print(f"  → {dict(record)}")
+            print("  ✓ Multiple parameter binding works")
+        else:
+            print("  ✗ No results returned")
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+
+    # Test CREATE with parameters
+    print("\n[CREATE with parameters]")
+    print("-" * 50)
+    try:
+        session.run(
+            "CREATE (p:ParamTest {name: $name, score: $score})",
+            name="ParamCreated",
+            score=99.5
+        )
+        result = session.run("MATCH (p:ParamTest {name: 'ParamCreated'}) RETURN p.name, p.score")
+        records = list(result)
+        if records:
+            rec = dict(records[0])
+            print(f"  → {rec}")
+            if rec.get('p.name') == 'ParamCreated' and rec.get('p.score') == 99.5:
+                print("  ✓ CREATE with parameters works")
+        else:
+            print("  ✗ Node not created")
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+
+    # Cleanup
+    run_test(session, "Delete ParamTest nodes",
+             "MATCH (p:ParamTest) DELETE p",
+             expect_results=False)
+
+
+def test_shortest_path(session):
+    """Test shortestPath() and allShortestPaths() functions."""
+    print("\n" + "=" * 60)
+    print("SHORTEST PATH FUNCTIONS")
+    print("=" * 60)
+
+    # Create a graph for path testing:
+    #   A --KNOWS--> B --KNOWS--> C
+    #   |                         ^
+    #   +-------KNOWS-------------+
+    # So there are two paths from A to C: A->B->C (length 2) and A->C (length 1)
+
+    run_test(session, "Create path node A",
+             "CREATE (a:PathNode {name: 'A'})",
+             expect_results=False)
+    run_test(session, "Create path node B",
+             "CREATE (b:PathNode {name: 'B'})",
+             expect_results=False)
+    run_test(session, "Create path node C",
+             "CREATE (c:PathNode {name: 'C'})",
+             expect_results=False)
+
+    # Create relationships
+    run_test(session, "Create A->B",
+             "MATCH (a:PathNode {name: 'A'}), (b:PathNode {name: 'B'}) CREATE (a)-[:KNOWS]->(b)",
+             expect_results=False)
+    run_test(session, "Create B->C",
+             "MATCH (b:PathNode {name: 'B'}), (c:PathNode {name: 'C'}) CREATE (b)-[:KNOWS]->(c)",
+             expect_results=False)
+    run_test(session, "Create A->C (direct)",
+             "MATCH (a:PathNode {name: 'A'}), (c:PathNode {name: 'C'}) CREATE (a)-[:KNOWS]->(c)",
+             expect_results=False)
+
+    # Test shortestPath
+    print("\n[shortestPath from A to C]")
+    print("-" * 50)
+    try:
+        result = session.run(
+            "MATCH p = shortestPath((a:PathNode {name: 'A'})-[:KNOWS*]->(c:PathNode {name: 'C'})) RETURN p"
+        )
+        records = list(result)
+        if records:
+            for record in records:
+                path = record['p']
+                if hasattr(path, 'nodes'):
+                    print(f"  → Path with {len(path.nodes)} nodes, {len(path.relationships)} relationships")
+                    node_names = [n.get('name', 'unknown') for n in path.nodes]
+                    print(f"  → Node sequence: {' -> '.join(node_names)}")
+                    if len(path.relationships) == 1:
+                        print("  ✓ shortestPath found direct path A->C (length 1)")
+                else:
+                    print(f"  → {path}")
+        else:
+            print("  → No path found (this may be expected if shortestPath not fully implemented)")
+    except Exception as e:
+        print(f"  Note: shortestPath query returned: {e}")
+
+    # Test allShortestPaths
+    print("\n[allShortestPaths from A to C]")
+    print("-" * 50)
+    try:
+        result = session.run(
+            "MATCH p = allShortestPaths((a:PathNode {name: 'A'})-[:KNOWS*]->(c:PathNode {name: 'C'})) RETURN p"
+        )
+        records = list(result)
+        if records:
+            print(f"  → Found {len(records)} path(s)")
+            for i, record in enumerate(records):
+                path = record['p']
+                if hasattr(path, 'nodes'):
+                    node_names = [n.get('name', 'unknown') for n in path.nodes]
+                    print(f"  → Path {i+1}: {' -> '.join(node_names)}")
+        else:
+            print("  → No paths found")
+    except Exception as e:
+        print(f"  Note: allShortestPaths query returned: {e}")
+
+    # Cleanup
+    run_test(session, "Delete PathNode nodes",
+             "MATCH (n:PathNode) DETACH DELETE n",
+             expect_results=False)
+
+
+def test_label_removal(session):
+    """Test REMOVE n:Label syntax for label removal."""
+    print("\n" + "=" * 60)
+    print("LABEL REMOVAL")
+    print("=" * 60)
+
+    # Create a node with multiple labels
+    run_test(session, "Create node with multiple labels",
+             "CREATE (p:Person:Employee:Manager {name: 'LabelTest'})",
+             expect_results=False)
+
+    # Verify initial labels
+    print("\n[Verify initial labels]")
+    print("-" * 50)
+    try:
+        result = session.run("MATCH (p:Person {name: 'LabelTest'}) RETURN p")
+        records = list(result)
+        if records:
+            node = records[0]['p']
+            labels = list(node.labels) if hasattr(node, 'labels') else []
+            print(f"  → Labels: {labels}")
+            if 'Manager' in labels:
+                print("  ✓ Node has Manager label")
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+
+    # Remove a label using REMOVE n:Label syntax
+    run_test(session, "Remove Manager label",
+             "MATCH (p:Person {name: 'LabelTest'}) REMOVE p:Manager",
+             expect_results=False)
+
+    # Verify label was removed
+    print("\n[Verify Manager label removed]")
+    print("-" * 50)
+    try:
+        result = session.run("MATCH (p:Person {name: 'LabelTest'}) RETURN p")
+        records = list(result)
+        if records:
+            node = records[0]['p']
+            labels = list(node.labels) if hasattr(node, 'labels') else []
+            print(f"  → Labels after removal: {labels}")
+            if 'Manager' not in labels:
+                print("  ✓ Manager label successfully removed")
+            else:
+                print("  ✗ Manager label still present")
+            if 'Person' in labels and 'Employee' in labels:
+                print("  ✓ Other labels preserved (Person, Employee)")
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+
+    # Test that node is no longer matched by removed label
+    print("\n[Verify node not matched by removed label]")
+    print("-" * 50)
+    try:
+        result = session.run("MATCH (p:Manager {name: 'LabelTest'}) RETURN p")
+        records = list(result)
+        if not records:
+            print("  ✓ Node no longer matched by :Manager label")
+        else:
+            print("  ✗ Node still matched by :Manager label")
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+
+    # Cleanup
+    run_test(session, "Delete LabelTest node",
+             "MATCH (p:Person {name: 'LabelTest'}) DETACH DELETE p",
+             expect_results=False)
+
+
 def test_variable_length_paths(session):
     """Test variable-length path patterns [*1..3]."""
     print("\n" + "=" * 60)
@@ -437,6 +703,11 @@ def main():
         test_remove_operations(session)
         test_unwind_operations(session)
         test_variable_length_paths(session)
+
+        # New feature tests
+        test_parameter_binding(session)
+        test_shortest_path(session)
+        test_label_removal(session)
 
         # Cleanup
         cleanup(session)
