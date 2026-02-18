@@ -671,6 +671,65 @@ def cleanup(session):
     print("\n  Cleanup complete")
 
 
+def test_datetime_queries(session):
+    """Test AT TIME clause with ISO 8601 date/time strings instead of Unix timestamps."""
+    from datetime import datetime, timezone
+
+    print("\n" + "=" * 60)
+    print("DATE/TIME TEMPORAL QUERIES")
+    print("=" * 60)
+
+    # Create some temporal test nodes
+    run_test(session, "Create TemporalPerson Alice",
+             "CREATE (p:TemporalPerson {name: 'Alice', role: 'Engineer'})",
+             expect_results=False)
+
+    import time
+    time.sleep(0.05)  # small delay so versions are distinct
+
+    run_test(session, "Update Alice role",
+             "MATCH (p:TemporalPerson {name: 'Alice'}) SET p.role = 'Senior Engineer'",
+             expect_results=False)
+
+    # 1. Query at EARLIEST using the keyword (already works, sanity check)
+    run_test(session, "AT TIME EARLIEST (keyword)",
+             "MATCH (p:TemporalPerson {name: 'Alice'}) AT TIME EARLIEST RETURN p.name, p.role")
+
+    # 2. Query with an ISO 8601 date-only string as the AT TIME value.
+    #    A far-future date should return the current (latest) version.
+    run_test(session, "AT TIME ISO date string (future)",
+             "MATCH (p:TemporalPerson {name: 'Alice'}) AT TIME '2099-12-31' RETURN p.name, p.role")
+
+    # 3. Query with an ISO 8601 datetime string.
+    run_test(session, "AT TIME ISO datetime string (future)",
+             "MATCH (p:TemporalPerson {name: 'Alice'}) AT TIME '2099-12-31T23:59:59' RETURN p.name, p.role")
+
+    # 4. Pass a Python datetime object as a parameter; the server converts it to ISO 8601.
+    print("\n[AT TIME via Python datetime parameter]")
+    print("-" * 50)
+    try:
+        future_dt = datetime(2099, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+        result = session.run(
+            "MATCH (p:TemporalPerson {name: $name}) AT TIME $at_time RETURN p.name, p.role",
+            name="Alice",
+            at_time=future_dt,
+        )
+        records = list(result)
+        if records:
+            for rec in records:
+                print(f"  → {dict(rec)}")
+            print("  ✓ datetime parameter accepted")
+        else:
+            print("  → (no results)")
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+
+    # Cleanup temporal test nodes
+    run_test(session, "Cleanup TemporalPerson",
+             "MATCH (p:TemporalPerson) DETACH DELETE p",
+             expect_results=False)
+
+
 def main():
     uri = "bolt://localhost:7687"
 
@@ -708,6 +767,7 @@ def main():
         test_parameter_binding(session)
         test_shortest_path(session)
         test_label_removal(session)
+        test_datetime_queries(session)
 
         # Cleanup
         cleanup(session)

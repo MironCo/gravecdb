@@ -9,6 +9,7 @@ import (
 	"math"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/MironCo/gravecdb/bolt/messages"
 	"github.com/MironCo/gravecdb/bolt/packstream"
@@ -716,9 +717,83 @@ func formatParamValue(value interface{}) string {
 			parts = append(parts, k+": "+formatParamValue(val))
 		}
 		return "{" + joinStrings(parts, ", ") + "}"
+	case time.Time:
+		// Render as an ISO 8601 string literal so the Cypher parser picks it up
+		return "'" + v.UTC().Format(time.RFC3339) + "'"
+	case *packstream.RawStruct:
+		// Convert Bolt temporal structs (Date, LocalDateTime, DateTime) to ISO 8601
+		if t, ok := rawStructToTime(v); ok {
+			return "'" + t.UTC().Format(time.RFC3339) + "'"
+		}
+		return fmt.Sprintf("%v", v)
 	default:
 		return fmt.Sprintf("%v", v)
 	}
+}
+
+// rawStructToTime converts a PackStream temporal structure to a time.Time.
+// Bolt 4.x temporal struct signatures:
+//
+//	0x44 Date           – [epochDays int64]
+//	0x54 Time           – [nanosOfDay int64, utcOffsetSeconds int64]
+//	0x74 LocalTime      – [nanosOfDay int64]
+//	0x64 LocalDateTime  – [epochSeconds int64, nanosAdjustment int64]
+//	0x46 DateTime       – [epochSeconds int64, nanosAdjustment int64, utcOffsetSeconds int64]
+func rawStructToTime(s *packstream.RawStruct) (time.Time, bool) {
+	getInt := func(i int) (int64, bool) {
+		if i >= len(s.Fields) {
+			return 0, false
+		}
+		v, ok := s.Fields[i].(int64)
+		return v, ok
+	}
+
+	switch s.Sig {
+	case 0x44: // Date
+		days, ok := getInt(0)
+		if !ok {
+			return time.Time{}, false
+		}
+		t := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, int(days))
+		return t, true
+
+	case 0x74: // LocalTime
+		nanos, ok := getInt(0)
+		if !ok {
+			return time.Time{}, false
+		}
+		t := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(nanos))
+		return t, true
+
+	case 0x54: // Time (with UTC offset)
+		nanos, ok1 := getInt(0)
+		offsetSecs, ok2 := getInt(1)
+		if !ok1 || !ok2 {
+			return time.Time{}, false
+		}
+		loc := time.FixedZone("", int(offsetSecs))
+		t := time.Date(1970, 1, 1, 0, 0, 0, 0, loc).Add(time.Duration(nanos))
+		return t, true
+
+	case 0x64: // LocalDateTime
+		secs, ok1 := getInt(0)
+		nanos, ok2 := getInt(1)
+		if !ok1 || !ok2 {
+			return time.Time{}, false
+		}
+		return time.Unix(secs, nanos).UTC(), true
+
+	case 0x46: // DateTime (with UTC offset)
+		secs, ok1 := getInt(0)
+		nanos, ok2 := getInt(1)
+		offsetSecs, ok3 := getInt(2)
+		if !ok1 || !ok2 || !ok3 {
+			return time.Time{}, false
+		}
+		loc := time.FixedZone("", int(offsetSecs))
+		return time.Unix(secs, nanos).In(loc), true
+	}
+	return time.Time{}, false
 }
 
 // escapeString escapes special characters in a string for Cypher

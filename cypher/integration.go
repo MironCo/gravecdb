@@ -3,6 +3,7 @@ package cypher
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ParseToGraph converts the new parser output to graph.Query compatible structures
@@ -704,14 +705,42 @@ func convertUnwindToGraph(u *UnwindClause) *GraphUnwindClause {
 	}
 }
 
+// dateTimeLayouts are the ISO 8601 formats we attempt to parse, in order of specificity.
+var dateTimeLayouts = []string{
+	time.RFC3339,                // "2006-01-02T15:04:05Z07:00"
+	"2006-01-02T15:04:05Z",     // UTC with literal Z
+	"2006-01-02T15:04:05",      // no timezone
+	"2006-01-02 15:04:05",      // space separator
+	"2006-01-02T15:04",         // no seconds
+	"2006-01-02",               // date only
+}
+
+// parseDateTimeString attempts to parse s as an ISO 8601 date/time string and
+// returns the corresponding Unix timestamp. Returns an error if no format matches.
+func parseDateTimeString(s string) (int64, error) {
+	for _, layout := range dateTimeLayouts {
+		t, err := time.Parse(layout, s)
+		if err == nil {
+			return t.Unix(), nil
+		}
+	}
+	return 0, fmt.Errorf("cannot parse %q as a date/time value", s)
+}
+
 func convertTimeToGraph(t *TimeClause) *GraphTimeClause {
 	gt := &GraphTimeClause{
 		Mode: t.Mode,
 	}
 
 	if t.Timestamp != nil {
-		if intLit, ok := t.Timestamp.(*IntegerLiteral); ok {
-			gt.Timestamp = intLit.Value
+		switch v := t.Timestamp.(type) {
+		case *IntegerLiteral:
+			gt.Timestamp = v.Value
+		case *StringLiteral:
+			// Accept ISO 8601 date/time strings, e.g. "2024-01-15" or "2024-01-15T10:30:00"
+			if ts, err := parseDateTimeString(v.Value); err == nil {
+				gt.Timestamp = ts
+			}
 		}
 	}
 
