@@ -792,6 +792,7 @@ var precedences = map[TokenType]int{
 	TOKEN_IS:       COMPARISON,
 	TOKEN_PLUS:     ADDITIVE,
 	TOKEN_MINUS:    ADDITIVE,
+	TOKEN_DASH:     ADDITIVE,
 	TOKEN_STAR:     MULTIPLICATIVE,
 	TOKEN_SLASH:    MULTIPLICATIVE,
 	TOKEN_PERCENT:  MULTIPLICATIVE,
@@ -841,7 +842,7 @@ func (p *Parser) parseExpression(precedence int) Expression {
 		left = p.parseGroupedExpression()
 	case TOKEN_NOT:
 		left = p.parseNotExpression()
-	case TOKEN_MINUS:
+	case TOKEN_MINUS, TOKEN_DASH:
 		left = p.parseNegationExpression()
 	case TOKEN_CASE:
 		left = p.parseCaseExpression()
@@ -864,7 +865,7 @@ func (p *Parser) parseExpression(precedence int) Expression {
 			left = p.parsePropertyAccess(left)
 		case TOKEN_LBRACKET:
 			left = p.parseIndexAccess(left)
-		case TOKEN_PLUS, TOKEN_MINUS, TOKEN_STAR, TOKEN_SLASH, TOKEN_PERCENT, TOKEN_CARET:
+		case TOKEN_PLUS, TOKEN_MINUS, TOKEN_DASH, TOKEN_STAR, TOKEN_SLASH, TOKEN_PERCENT, TOKEN_CARET:
 			left = p.parseBinaryExpression(left)
 		case TOKEN_AND, TOKEN_OR, TOKEN_XOR:
 			left = p.parseBinaryExpression(left)

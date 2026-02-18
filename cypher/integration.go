@@ -137,10 +137,11 @@ type GraphReturnClause struct {
 }
 
 type GraphReturnItem struct {
-	Variable    string
-	Property    string
-	Aggregation string // COUNT, SUM, AVG, MIN, MAX, COLLECT
-	Alias       string
+	Variable     string
+	Property     string
+	Aggregation  string // COUNT, SUM, AVG, MIN, MAX, COLLECT
+	FunctionName string // toUpper, abs, size, etc. (lowercase)
+	Alias        string
 }
 
 type GraphOrderItem struct {
@@ -585,10 +586,19 @@ func convertReturnToGraph(r *ReturnClause) *GraphReturnClause {
 	for _, item := range r.Items {
 		gi := GraphReturnItem{}
 
-		// Check if it's a function call (aggregation)
+		// Check if it's a function call (aggregation or scalar)
 		if fc, ok := item.Expression.(*FunctionCall); ok {
-			gi.Aggregation = strings.ToUpper(fc.Name)
-			// Get the argument (e.g., COUNT(p) -> p)
+			upper := strings.ToUpper(fc.Name)
+			isAgg := upper == "COUNT" || upper == "SUM" || upper == "AVG" ||
+				upper == "MIN" || upper == "MAX" || upper == "COLLECT"
+
+			if isAgg {
+				gi.Aggregation = upper
+			} else {
+				gi.FunctionName = strings.ToLower(fc.Name)
+			}
+
+			// Extract the first argument's variable/property for both aggregation and scalar
 			if len(fc.Arguments) > 0 {
 				switch arg := fc.Arguments[0].(type) {
 				case *Identifier:
@@ -600,9 +610,15 @@ func convertReturnToGraph(r *ReturnClause) *GraphReturnClause {
 					gi.Property = arg.Property
 				case *Star:
 					gi.Variable = "*"
+				case *IntegerLiteral:
+					// e.g. abs(-5) — store literal as a special variable sentinel
+					gi.Variable = fmt.Sprintf("%d", arg.Value)
+				case *FloatLiteral:
+					gi.Variable = fmt.Sprintf("%v", arg.Value)
+				case *StringLiteral:
+					gi.Variable = "'" + arg.Value + "'"
 				}
 			} else if gi.Aggregation == "COUNT" {
-				// COUNT() with no args is same as COUNT(*)
 				gi.Variable = "*"
 			}
 		} else {
@@ -826,6 +842,16 @@ func extractExprValue(expr Expression) interface{} {
 		return m
 	case *Identifier:
 		return e.Name
+	case *UnaryExpression:
+		if e.Operator == "-" {
+			switch inner := e.Operand.(type) {
+			case *IntegerLiteral:
+				return -int(inner.Value)
+			case *FloatLiteral:
+				return -inner.Value
+			}
+		}
+		return nil
 	default:
 		return nil
 	}

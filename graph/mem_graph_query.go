@@ -2,7 +2,10 @@ package graph
 
 import (
 	"fmt"
+	"math"
+	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -888,6 +891,12 @@ func getColumnName(item ReturnItem) string {
 		}
 		return fmt.Sprintf("%s(%s)", item.Aggregation, item.Variable)
 	}
+	if item.FunctionName != "" {
+		if item.Property != "" {
+			return fmt.Sprintf("%s(%s.%s)", item.FunctionName, item.Variable, item.Property)
+		}
+		return fmt.Sprintf("%s(%s)", item.FunctionName, item.Variable)
+	}
 	if item.Property != "" {
 		return item.Variable + "." + item.Property
 	}
@@ -900,6 +909,30 @@ func (g *memGraph) buildRowFromMatch(match Match, items []ReturnItem) map[string
 
 	for _, item := range items {
 		colName := getColumnName(item)
+
+		// Scalar function: resolve argument value then apply function
+		if item.FunctionName != "" {
+			var rawVal interface{}
+			// Check for literal sentinels (e.g. abs(-5) where variable holds "5")
+			entity, hasEntity := match[item.Variable]
+			if hasEntity {
+				if item.Property != "" {
+					if node, ok := entity.(*Node); ok {
+						rawVal = node.Properties[item.Property]
+					} else if rel, ok := entity.(*Relationship); ok {
+						rawVal = rel.Properties[item.Property]
+					}
+				} else {
+					rawVal = entity
+				}
+			} else {
+				// Variable is a literal value sentinel from UNWIND / inline literal
+				rawVal = item.Variable
+			}
+			row[colName] = applyScalarFunction(item.FunctionName, rawVal)
+			continue
+		}
+
 		entity, ok := match[item.Variable]
 		if !ok {
 			row[colName] = nil
@@ -920,6 +953,142 @@ func (g *memGraph) buildRowFromMatch(match Match, items []ReturnItem) map[string
 	}
 
 	return row
+}
+
+// applyScalarFunction evaluates a scalar function (string, math, type conversion)
+// against a single value resolved from a return item.
+func applyScalarFunction(name string, val interface{}) interface{} {
+	asStr := func() string { return fmt.Sprint(val) }
+	asFloat := func() (float64, bool) {
+		switch v := val.(type) {
+		case float64:
+			return v, true
+		case float32:
+			return float64(v), true
+		case int:
+			return float64(v), true
+		case int64:
+			return float64(v), true
+		case string:
+			f, err := strconv.ParseFloat(v, 64)
+			return f, err == nil
+		}
+		return 0, false
+	}
+
+	switch name {
+	// ── String functions ──────────────────────────────────────────────────────
+	case "toupper":
+		return strings.ToUpper(asStr())
+	case "tolower":
+		return strings.ToLower(asStr())
+	case "trim":
+		return strings.TrimSpace(asStr())
+	case "ltrim":
+		return strings.TrimLeft(asStr(), " \t")
+	case "rtrim":
+		return strings.TrimRight(asStr(), " \t")
+	case "reverse":
+		r := []rune(asStr())
+		for i, j := 0, len(r)-1; i < j; i, j = i+1, j-1 {
+			r[i], r[j] = r[j], r[i]
+		}
+		return string(r)
+	case "size":
+		switch v := val.(type) {
+		case string:
+			return int64(len([]rune(v)))
+		case []interface{}:
+			return int64(len(v))
+		}
+		return int64(len([]rune(asStr())))
+	case "left":
+		// left(str, n) — needs two args; single-arg fallback returns whole string
+		return asStr()
+	case "right":
+		return asStr()
+	case "replace":
+		// replace(str, from, to) — single-arg fallback
+		return asStr()
+
+	// ── Type conversion ───────────────────────────────────────────────────────
+	case "tostring":
+		return asStr()
+	case "tointeger", "toint":
+		if f, ok := asFloat(); ok {
+			return int64(f)
+		}
+		if i, err := strconv.ParseInt(asStr(), 10, 64); err == nil {
+			return i
+		}
+		return nil
+	case "tofloat":
+		if f, ok := asFloat(); ok {
+			return f
+		}
+		return nil
+	case "toboolean":
+		s := strings.ToLower(strings.TrimSpace(asStr()))
+		if s == "true" {
+			return true
+		}
+		if s == "false" {
+			return false
+		}
+		return nil
+
+	// ── Math functions ────────────────────────────────────────────────────────
+	case "abs":
+		if f, ok := asFloat(); ok {
+			return math.Abs(f)
+		}
+	case "ceil":
+		if f, ok := asFloat(); ok {
+			return math.Ceil(f)
+		}
+	case "floor":
+		if f, ok := asFloat(); ok {
+			return math.Floor(f)
+		}
+	case "round":
+		if f, ok := asFloat(); ok {
+			return math.Round(f)
+		}
+	case "sqrt":
+		if f, ok := asFloat(); ok {
+			return math.Sqrt(f)
+		}
+	case "sign":
+		if f, ok := asFloat(); ok {
+			if f > 0 {
+				return float64(1)
+			} else if f < 0 {
+				return float64(-1)
+			}
+			return float64(0)
+		}
+	case "rand":
+		return rand.Float64()
+	case "log":
+		if f, ok := asFloat(); ok {
+			return math.Log(f)
+		}
+	case "log10":
+		if f, ok := asFloat(); ok {
+			return math.Log10(f)
+		}
+	case "exp":
+		if f, ok := asFloat(); ok {
+			return math.Exp(f)
+		}
+	case "e":
+		return math.E
+	case "pi":
+		return math.Pi
+	}
+
+	// Unknown function — return the value unchanged
+	return val
 }
 
 // buildAggregatedRows handles aggregation functions like COUNT, SUM, AVG, etc.

@@ -671,6 +671,79 @@ def cleanup(session):
     print("\n  Cleanup complete")
 
 
+def test_scalar_functions(session):
+    """Test string and math scalar functions in RETURN clause."""
+    print("\n" + "=" * 60)
+    print("SCALAR FUNCTIONS")
+    print("=" * 60)
+
+    run_test(session, "Create function test node",
+             "CREATE (p:FnTest {name: 'alice', score: -4.7, age: 30})",
+             expect_results=False)
+
+    # String functions
+    run_test(session, "toUpper",  "MATCH (p:FnTest) RETURN toUpper(p.name)")
+    run_test(session, "toLower",  "MATCH (p:FnTest) RETURN toLower(p.name)")
+    run_test(session, "trim",     "MATCH (p:FnTest) RETURN trim(p.name)")
+    run_test(session, "reverse",  "MATCH (p:FnTest) RETURN reverse(p.name)")
+    run_test(session, "size",     "MATCH (p:FnTest) RETURN size(p.name)")
+    run_test(session, "toString", "MATCH (p:FnTest) RETURN toString(p.age)")
+
+    # Type conversion
+    run_test(session, "toInteger", "MATCH (p:FnTest) RETURN toInteger(p.score)")
+    run_test(session, "toFloat",   "MATCH (p:FnTest) RETURN toFloat(p.age)")
+
+    # Math functions
+    run_test(session, "abs",   "MATCH (p:FnTest) RETURN abs(p.score)")
+    run_test(session, "ceil",  "MATCH (p:FnTest) RETURN ceil(p.score)")
+    run_test(session, "floor", "MATCH (p:FnTest) RETURN floor(p.score)")
+    run_test(session, "round", "MATCH (p:FnTest) RETURN round(p.score)")
+    run_test(session, "sqrt",  "MATCH (p:FnTest) RETURN sqrt(p.age)")
+
+    # Verify known values
+    print("\n[Verify toUpper result]")
+    print("-" * 50)
+    try:
+        result = session.run("MATCH (p:FnTest) RETURN toUpper(p.name) AS upper_name")
+        records = list(result)
+        upper = records[0]["upper_name"] if records else None
+        if upper == "ALICE":
+            print("  ✓ toUpper('alice') = 'ALICE'")
+        else:
+            print(f"  ✗ Got: {upper}")
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+
+    print("\n[Verify abs result]")
+    print("-" * 50)
+    try:
+        result = session.run("MATCH (p:FnTest) RETURN abs(p.score) AS v")
+        records = list(result)
+        v = records[0]["v"] if records else None
+        if v is not None and abs(v - 4.7) < 0.001:
+            print(f"  ✓ abs(-4.7) = {v}")
+        else:
+            print(f"  ✗ Got: {v}")
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+
+    print("\n[Verify size result]")
+    print("-" * 50)
+    try:
+        result = session.run("MATCH (p:FnTest) RETURN size(p.name) AS n")
+        records = list(result)
+        n = records[0]["n"] if records else None
+        if n == 5:
+            print(f"  ✓ size('alice') = 5")
+        else:
+            print(f"  ✗ Got: {n}")
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+
+    run_test(session, "Cleanup FnTest",
+             "MATCH (p:FnTest) DELETE p", expect_results=False)
+
+
 def test_datetime_queries(session):
     """Test AT TIME clause with ISO 8601 date/time strings instead of Unix timestamps."""
     from datetime import datetime, timezone
@@ -768,6 +841,7 @@ def main():
         test_shortest_path(session)
         test_label_removal(session)
         test_datetime_queries(session)
+        test_scalar_functions(session)
 
         # Cleanup
         cleanup(session)
