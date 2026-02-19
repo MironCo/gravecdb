@@ -117,6 +117,29 @@ func (s *BoltStore) GetNode(id string) (*core.Node, error) {
 	return node, err
 }
 
+// GetNodeVersions retrieves all versions (current + historical) of a node by ID
+func (s *BoltStore) GetNodeVersions(id string) ([]*core.Node, error) {
+	var versions []*core.Node
+
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(nodesBucket)
+		c := b.Cursor()
+
+		prefix := []byte(id + ":")
+		for k, v := c.Seek(prefix); k != nil && len(k) >= len(prefix) && string(k[:len(prefix)]) == string(prefix); k, v = c.Next() {
+			var n core.Node
+			if err := json.Unmarshal(v, &n); err != nil {
+				return fmt.Errorf("failed to unmarshal node: %w", err)
+			}
+			versions = append(versions, &n)
+		}
+
+		return nil
+	})
+
+	return versions, err
+}
+
 // GetAllNodes retrieves all nodes from the database
 func (s *BoltStore) GetAllNodes() ([]*core.Node, error) {
 	var nodes []*core.Node

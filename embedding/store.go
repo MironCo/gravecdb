@@ -76,6 +76,12 @@ func NewStore() *Store {
 	}
 }
 
+// LoadEmbedding inserts an embedding directly, preserving its original ValidFrom/ValidTo.
+// Use this when loading persisted embeddings from disk (not for new embeddings).
+func (s *Store) LoadEmbedding(emb *Embedding) {
+	s.embeddings[emb.NodeID] = append(s.embeddings[emb.NodeID], emb)
+}
+
 // Add stores a new embedding for a node, closing out any previous embedding
 func (s *Store) Add(nodeID string, vector []float32, model string, propertySnapshot map[string]interface{}) *Embedding {
 	now := time.Now()

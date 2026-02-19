@@ -73,7 +73,12 @@ func (g *DiskGraph) rebuildLabelIndex() error {
 		return err
 	}
 
+	seen := make(map[string]bool)
 	for _, node := range nodes {
+		if node.ValidTo != nil || seen[node.ID] {
+			continue // only index currently valid nodes, deduplicate
+		}
+		seen[node.ID] = true
 		for _, label := range node.Labels {
 			g.labelIndex[label] = append(g.labelIndex[label], node.ID)
 		}
@@ -125,69 +130,40 @@ func (g *DiskGraph) Stats() (map[string]interface{}, error) {
 	}, nil
 }
 
-// AsOf returns a temporal view of the graph at a specific time
-// For disk mode, we load the snapshot into memory (hybrid approach)
+// AsOf returns a temporal view of the graph at a specific point in time.
+// Scans disk for all node/relationship versions valid at t.
 func (g *DiskGraph) AsOf(t time.Time) *TemporalView {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
-	// Create a new in-memory graph
-	snapshot := newMemGraph()
-
-	// Load all nodes from disk and filter by time
-	allNodes, err := g.boltStore.GetAllNodes()
-	if err != nil {
-		return snapshot.asOf(t)
+	tv := &TemporalView{
+		nodes:         make(map[string]*Node),
+		relationships: make(map[string]*Relationship),
+		nodesByLabel:  make(map[string][]string),
+		nodeRelIndex:  make(map[string][]string),
+		asOfTime:      t,
 	}
 
+	allNodes, _ := g.boltStore.GetAllNodes()
 	for _, node := range allNodes {
 		if node.IsValidAt(t) {
-			snapshot.nodes[node.ID] = node
-			// Also add to nodeVersions so TemporalView.GetAllNodes() can find them
-			if snapshot.nodeVersions[node.ID] == nil {
-				snapshot.nodeVersions[node.ID] = []*Node{}
-			}
-			snapshot.nodeVersions[node.ID] = append(snapshot.nodeVersions[node.ID], node)
-
+			tv.nodes[node.ID] = node
 			for _, label := range node.Labels {
-				if snapshot.nodesByLabel[label] == nil {
-					snapshot.nodesByLabel[label] = make(map[string]*Node)
-				}
-				snapshot.nodesByLabel[label][node.ID] = node
+				tv.nodesByLabel[label] = append(tv.nodesByLabel[label], node.ID)
 			}
 		}
 	}
 
-	// Load all relationships from disk and filter by time
-	allRels, err := g.boltStore.GetAllRelationships()
-	if err != nil {
-		return snapshot.asOf(t)
-	}
-
+	allRels, _ := g.boltStore.GetAllRelationships()
 	for _, rel := range allRels {
 		if rel.IsValidAt(t) {
-			snapshot.relationships[rel.ID] = rel
-			// Also add to relationshipVersions so TemporalView.GetAllRelationships() can find them
-			if snapshot.relationshipVersions[rel.ID] == nil {
-				snapshot.relationshipVersions[rel.ID] = []*Relationship{}
-			}
-			snapshot.relationshipVersions[rel.ID] = append(snapshot.relationshipVersions[rel.ID], rel)
+			tv.relationships[rel.ID] = rel
+			tv.nodeRelIndex[rel.FromNodeID] = append(tv.nodeRelIndex[rel.FromNodeID], rel.ID)
+			tv.nodeRelIndex[rel.ToNodeID] = append(tv.nodeRelIndex[rel.ToNodeID], rel.ID)
 		}
 	}
 
-	// Load embeddings
-	allEmbs, err := g.boltStore.GetAllEmbeddings()
-	if err != nil {
-		return snapshot.asOf(t)
-	}
-
-	for nodeID, embeddings := range allEmbs {
-		for _, emb := range embeddings {
-			snapshot.embeddings.Add(nodeID, emb.Vector, emb.Model, emb.PropertySnapshot)
-		}
-	}
-
-	return snapshot.asOf(t)
+	return tv
 }
 
 // GetAllNodeVersions returns all versions of all nodes (for building timelines)
@@ -214,72 +190,161 @@ func (g *DiskGraph) GetAllRelationshipVersions() []*Relationship {
 	return rels
 }
 
-// loadIntoMemory creates an in-memory graph with current data (for complex operations)
-func (g *DiskGraph) loadIntoMemory() *memGraph {
-	memGraph := newMemGraph()
-
-	nodes, _ := g.boltStore.GetAllNodes()
-	for _, n := range nodes {
-		if n.ValidTo == nil {
-			memGraph.nodes[n.ID] = n
-			for _, label := range n.Labels {
-				if memGraph.nodesByLabel[label] == nil {
-					memGraph.nodesByLabel[label] = make(map[string]*Node)
-				}
-				memGraph.nodesByLabel[label][n.ID] = n
-			}
-		}
-	}
-
-	rels, _ := g.boltStore.GetAllRelationships()
-	for _, r := range rels {
-		if r.ValidTo == nil {
-			memGraph.relationships[r.ID] = r
-		}
-	}
-
-	return memGraph
+// diskPathStep is used during BFS/DFS path reconstruction
+type diskPathStep struct {
+	rel        *Relationship
+	previousID string
 }
 
-// loadIntoMemoryUnlocked creates an in-memory graph (caller must hold lock)
-func (g *DiskGraph) loadIntoMemoryUnlocked() *memGraph {
-	memGraph := newMemGraph()
-
-	nodes, _ := g.boltStore.GetAllNodes()
-	for _, n := range nodes {
-		if n.ValidTo == nil {
-			memGraph.nodes[n.ID] = n
-			for _, label := range n.Labels {
-				if memGraph.nodesByLabel[label] == nil {
-					memGraph.nodesByLabel[label] = make(map[string]*Node)
-				}
-				memGraph.nodesByLabel[label][n.ID] = n
-			}
-		}
-	}
-
-	rels, _ := g.boltStore.GetAllRelationships()
-	for _, r := range rels {
-		if r.ValidTo == nil {
-			memGraph.relationships[r.ID] = r
-		}
-	}
-
-	return memGraph
-}
-
-// ShortestPath finds the shortest path between two nodes
+// ShortestPath finds the shortest path between two nodes using BFS on the disk indexes.
 func (g *DiskGraph) ShortestPath(fromID, toID string) *Path {
-	// Delegate to in-memory graph for path finding (complex traversal operation)
-	memGraph := g.loadIntoMemory()
-	return memGraph.ShortestPath(fromID, toID)
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.shortestPathUnlocked(fromID, toID)
 }
 
-// AllPaths finds all paths between two nodes up to maxDepth
+// shortestPathUnlocked performs BFS without acquiring the lock (caller must hold lock).
+func (g *DiskGraph) shortestPathUnlocked(fromID, toID string) *Path {
+	fromNode := g.getNodeUnlocked(fromID)
+	toNode := g.getNodeUnlocked(toID)
+	if fromNode == nil || !fromNode.IsCurrentlyValid() || toNode == nil || !toNode.IsCurrentlyValid() {
+		return nil
+	}
+
+	queue := []string{fromID}
+	visited := map[string]bool{fromID: true}
+	parent := map[string]*diskPathStep{}
+
+	for len(queue) > 0 {
+		currentID := queue[0]
+		queue = queue[1:]
+
+		if currentID == toID {
+			return g.reconstructPathUnlocked(fromID, toID, parent)
+		}
+
+		for _, rel := range g.getRelationshipsForNodeUnlocked(currentID) {
+			if !rel.IsCurrentlyValid() {
+				continue
+			}
+			var neighborID string
+			if rel.FromNodeID == currentID {
+				neighborID = rel.ToNodeID
+			} else {
+				neighborID = rel.FromNodeID
+			}
+			if !visited[neighborID] {
+				neighbor := g.getNodeUnlocked(neighborID)
+				if neighbor == nil || !neighbor.IsCurrentlyValid() {
+					continue
+				}
+				visited[neighborID] = true
+				parent[neighborID] = &diskPathStep{rel: rel, previousID: currentID}
+				queue = append(queue, neighborID)
+			}
+		}
+	}
+	return nil
+}
+
+func (g *DiskGraph) reconstructPathUnlocked(fromID, toID string, parent map[string]*diskPathStep) *Path {
+	path := &Path{Nodes: []*Node{}, Relationships: []*Relationship{}}
+
+	current := toID
+	var steps []string
+	var rels []*Relationship
+
+	for current != fromID {
+		steps = append(steps, current)
+		step := parent[current]
+		if step == nil {
+			return nil
+		}
+		rels = append(rels, step.rel)
+		current = step.previousID
+	}
+	steps = append(steps, fromID)
+
+	for i := len(steps) - 1; i >= 0; i-- {
+		if node := g.getNodeUnlocked(steps[i]); node != nil {
+			path.Nodes = append(path.Nodes, node)
+		}
+	}
+	for i := len(rels) - 1; i >= 0; i-- {
+		path.Relationships = append(path.Relationships, rels[i])
+	}
+	path.Length = len(path.Relationships)
+	return path
+}
+
+// AllPaths finds all simple paths between two nodes using DFS on the disk indexes.
 func (g *DiskGraph) AllPaths(fromID, toID string, maxDepth int) []*Path {
-	// Delegate to in-memory graph for path finding (complex traversal operation)
-	memGraph := g.loadIntoMemory()
-	return memGraph.AllPaths(fromID, toID, maxDepth)
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.allPathsUnlocked(fromID, toID, maxDepth)
+}
+
+// allPathsUnlocked performs DFS without acquiring the lock (caller must hold lock).
+func (g *DiskGraph) allPathsUnlocked(fromID, toID string, maxDepth int) []*Path {
+	fromNode := g.getNodeUnlocked(fromID)
+	toNode := g.getNodeUnlocked(toID)
+	if fromNode == nil || !fromNode.IsCurrentlyValid() || toNode == nil || !toNode.IsCurrentlyValid() {
+		return nil
+	}
+
+	var paths []*Path
+	visited := make(map[string]bool)
+	currentPath := &Path{Nodes: []*Node{}, Relationships: []*Relationship{}}
+	g.dfsAllPathsUnlocked(fromID, toID, visited, currentPath, &paths, maxDepth, 0)
+	return paths
+}
+
+func (g *DiskGraph) dfsAllPathsUnlocked(currentID, targetID string, visited map[string]bool, currentPath *Path, allPaths *[]*Path, maxDepth, depth int) {
+	if maxDepth > 0 && depth >= maxDepth {
+		return
+	}
+	visited[currentID] = true
+	currentNode := g.getNodeUnlocked(currentID)
+	if currentNode == nil || !currentNode.IsCurrentlyValid() {
+		visited[currentID] = false
+		return
+	}
+	currentPath.Nodes = append(currentPath.Nodes, currentNode)
+
+	if currentID == targetID {
+		pathCopy := &Path{
+			Nodes:         make([]*Node, len(currentPath.Nodes)),
+			Relationships: make([]*Relationship, len(currentPath.Relationships)),
+			Length:        len(currentPath.Relationships),
+		}
+		copy(pathCopy.Nodes, currentPath.Nodes)
+		copy(pathCopy.Relationships, currentPath.Relationships)
+		*allPaths = append(*allPaths, pathCopy)
+	} else {
+		for _, rel := range g.getRelationshipsForNodeUnlocked(currentID) {
+			if !rel.IsCurrentlyValid() {
+				continue
+			}
+			var neighborID string
+			if rel.FromNodeID == currentID {
+				neighborID = rel.ToNodeID
+			} else {
+				neighborID = rel.FromNodeID
+			}
+			if !visited[neighborID] {
+				neighbor := g.getNodeUnlocked(neighborID)
+				if neighbor == nil || !neighbor.IsCurrentlyValid() {
+					continue
+				}
+				currentPath.Relationships = append(currentPath.Relationships, rel)
+				g.dfsAllPathsUnlocked(neighborID, targetID, visited, currentPath, allPaths, maxDepth, depth+1)
+				currentPath.Relationships = currentPath.Relationships[:len(currentPath.Relationships)-1]
+			}
+		}
+	}
+
+	currentPath.Nodes = currentPath.Nodes[:len(currentPath.Nodes)-1]
+	visited[currentID] = false
 }
 
 // PathExists checks if any path exists between two nodes
