@@ -3,6 +3,9 @@ package graph
 import (
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/MironCo/gravecdb/embedding"
 )
 
 // ExecuteQueryWithEmbedder executes a Cypher-like query
@@ -234,22 +237,535 @@ func (g *DiskGraph) executeDeleteQuery(query *Query) (*QueryResult, error) {
 	}, nil
 }
 
-// executeReadQuery handles read-only MATCH queries using in-memory graph
+// executeReadQuery handles read-only MATCH queries disk-natively.
 func (g *DiskGraph) executeReadQuery(query *Query, embedder Embedder) (*QueryResult, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
-	memGraph := g.loadIntoMemoryUnlocked()
+	// Path queries (shortestPath / allShortestPaths)
+	if query.IsPathQuery && query.MatchPattern != nil && query.MatchPattern.PathFunction != nil {
+		return g.executePathQueryUnlocked(query)
+	}
 
-	// Load embeddings
-	embeddings, _ := g.boltStore.GetAllEmbeddings()
-	for nodeID, embs := range embeddings {
-		for _, emb := range embs {
-			memGraph.embeddings.Add(nodeID, emb.Vector, emb.Model, emb.PropertySnapshot)
+	// SIMILAR TO semantic search
+	if query.SimilarToClause != nil {
+		return g.executeSimilarToUnlocked(query, embedder)
+	}
+
+	// Temporal MATCH (AT TIME / EARLIEST)
+	if query.TimeClause != nil {
+		return g.executeTemporalMatchUnlocked(query)
+	}
+
+	// Regular MATCH
+	matches := g.findMatchesUnlocked(query.MatchPattern, query.WhereClause)
+	return buildResult(matches, query.ReturnClause), nil
+}
+
+// ============================================================================
+// Path queries
+// ============================================================================
+
+// executePathQueryUnlocked handles shortestPath / allShortestPaths (caller holds read lock).
+func (g *DiskGraph) executePathQueryUnlocked(query *Query) (*QueryResult, error) {
+	pf := query.MatchPattern.PathFunction
+
+	startCandidates := g.candidateNodesUnlocked(pf.StartPattern)
+	endCandidates := g.candidateNodesUnlocked(pf.EndPattern)
+
+	// Filter by WHERE clause
+	startNodes := filterNodesByWhere(startCandidates, pf.StartPattern.Variable, query.WhereClause)
+	endNodes := filterNodesByWhere(endCandidates, pf.EndPattern.Variable, query.WhereClause)
+
+	result := &QueryResult{Columns: []string{pf.Variable}, Rows: []map[string]interface{}{}}
+
+	for _, startNode := range startNodes {
+		for _, endNode := range endNodes {
+			if startNode.ID == endNode.ID {
+				continue
+			}
+			switch pf.Function {
+			case "shortestpath":
+				if path := g.shortestPathUnlocked(startNode.ID, endNode.ID); path != nil {
+					result.Rows = append(result.Rows, map[string]interface{}{pf.Variable: path})
+				}
+			case "allshortestpaths":
+				maxDepth := pf.MaxDepth
+				if maxDepth == 0 {
+					maxDepth = 10
+				}
+				for _, path := range g.allPathsUnlocked(startNode.ID, endNode.ID, maxDepth) {
+					result.Rows = append(result.Rows, map[string]interface{}{pf.Variable: path})
+				}
+			}
+		}
+	}
+	return result, nil
+}
+
+// candidateNodesUnlocked returns all currently-valid nodes matching a node pattern.
+func (g *DiskGraph) candidateNodesUnlocked(pattern NodePattern) []*Node {
+	var candidates []*Node
+	if len(pattern.Labels) > 0 {
+		nodeIDs := g.labelIndex[pattern.Labels[0]]
+		for _, id := range nodeIDs {
+			if n := g.getNodeUnlocked(id); n != nil && n.ValidTo == nil {
+				candidates = append(candidates, n)
+			}
+		}
+	} else {
+		allNodes, _ := g.boltStore.GetAllNodes()
+		for _, n := range allNodes {
+			if n.ValidTo == nil {
+				candidates = append(candidates, n)
+			}
+		}
+	}
+	if len(pattern.Properties) > 0 {
+		var filtered []*Node
+		for _, n := range candidates {
+			if matchesProperties(n.Properties, pattern.Properties) {
+				filtered = append(filtered, n)
+			}
+		}
+		return filtered
+	}
+	return candidates
+}
+
+// filterNodesByWhere keeps only nodes that satisfy conditions for a specific variable.
+func filterNodesByWhere(nodes []*Node, variable string, where *WhereClause) []*Node {
+	if where == nil {
+		return nodes
+	}
+	var result []*Node
+	for _, n := range nodes {
+		ok := true
+		for _, cond := range where.Conditions {
+			if cond.Variable != variable {
+				continue
+			}
+			if !evaluateCondition(n.Properties[cond.Property], cond.Operator, cond.Value) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			result = append(result, n)
+		}
+	}
+	return result
+}
+
+// ============================================================================
+// SIMILAR TO queries
+// ============================================================================
+
+// executeSimilarToUnlocked handles SIMILAR TO semantic search (caller holds read lock).
+func (g *DiskGraph) executeSimilarToUnlocked(query *Query, embedder Embedder) (*QueryResult, error) {
+	if embedder == nil {
+		return nil, fmt.Errorf("embedder required for SIMILAR TO clause")
+	}
+
+	stc := query.SimilarToClause
+
+	queryVector, err := embedder.Embed(stc.QueryText)
+	if err != nil {
+		return nil, fmt.Errorf("failed to embed query text: %w", err)
+	}
+
+	// Candidate nodes from the MATCH pattern
+	candidateIDs := make(map[string]bool)
+	var nodeVar string
+	if query.MatchPattern != nil && len(query.MatchPattern.Nodes) > 0 {
+		nodePattern := query.MatchPattern.Nodes[0]
+		nodeVar = nodePattern.Variable
+		candidates := g.candidateNodesUnlocked(nodePattern)
+		for _, n := range candidates {
+			candidateIDs[n.ID] = true
+		}
+		if query.WhereClause != nil {
+			filtered := make(map[string]bool)
+			for id := range candidateIDs {
+				n := g.getNodeUnlocked(id)
+				if n == nil {
+					continue
+				}
+				match := Match{nodeVar: n}
+				if len(g.filterMatchesUnlocked([]Match{match}, query.WhereClause)) > 0 {
+					filtered[id] = true
+				}
+			}
+			candidateIDs = filtered
 		}
 	}
 
-	return memGraph.ExecuteQueryWithEmbedder(query, embedder)
+	// Load all embeddings from disk into a temporary store
+	embStore := embedding.NewStore()
+	allEmbs, _ := g.boltStore.GetAllEmbeddings()
+	for nodeID, embs := range allEmbs {
+		for _, emb := range embs {
+			embStore.Add(nodeID, emb.Vector, emb.Model, emb.PropertySnapshot)
+		}
+	}
+
+	limit := stc.Limit
+	if limit == 0 {
+		limit = 100
+	}
+
+	// Build result columns
+	result := &QueryResult{Rows: []map[string]interface{}{}}
+	if query.ReturnClause != nil {
+		for _, item := range query.ReturnClause.Items {
+			if item.Property != "" {
+				result.Columns = append(result.Columns, item.Variable+"."+item.Property)
+			} else {
+				result.Columns = append(result.Columns, item.Variable)
+			}
+		}
+		result.Columns = append(result.Columns, "similarity")
+		if stc.ThroughTime {
+			result.Columns = append(result.Columns, "valid_from", "valid_to")
+			if stc.DriftMode {
+				result.Columns = append(result.Columns, "drift_from_previous", "drift_from_first")
+			}
+		}
+	} else {
+		if stc.ThroughTime {
+			if stc.DriftMode {
+				result.Columns = []string{"node", "similarity", "valid_from", "valid_to", "drift_from_previous", "drift_from_first"}
+			} else {
+				result.Columns = []string{"node", "similarity", "valid_from", "valid_to"}
+			}
+		} else {
+			result.Columns = []string{"node", "similarity"}
+		}
+	}
+
+	if stc.ThroughTime {
+		vsr := embStore.SearchAllVersions(queryVector, limit, candidateIDs, stc.Threshold, stc.DriftMode)
+		for _, v := range vsr {
+			node := g.getNodeUnlocked(v.NodeID)
+			if node == nil {
+				continue
+			}
+			props := v.Embedding.PropertySnapshot
+			if props == nil {
+				props = node.Properties
+			}
+			row := map[string]interface{}{}
+			if query.ReturnClause != nil {
+				for _, item := range query.ReturnClause.Items {
+					col := item.Variable
+					if item.Property != "" {
+						col = item.Variable + "." + item.Property
+						row[col] = props[item.Property]
+					} else {
+						row[col] = &Node{ID: node.ID, Labels: node.Labels, Properties: props, ValidFrom: v.ValidFrom, ValidTo: v.ValidTo}
+					}
+				}
+			} else {
+				row["node"] = &Node{ID: node.ID, Labels: node.Labels, Properties: props, ValidFrom: v.ValidFrom, ValidTo: v.ValidTo}
+			}
+			row["similarity"] = v.Similarity
+			row["valid_from"] = v.ValidFrom
+			if v.ValidTo != nil {
+				row["valid_to"] = *v.ValidTo
+			} else {
+				row["valid_to"] = nil
+			}
+			if stc.DriftMode {
+				row["drift_from_previous"] = v.DriftFromPrevious
+				row["drift_from_first"] = v.DriftFromFirst
+			}
+			result.Rows = append(result.Rows, row)
+		}
+	} else {
+		searchResults := embStore.Search(queryVector, limit, time.Now(), candidateIDs)
+		for _, sr := range searchResults {
+			if stc.Threshold > 0 && sr.Similarity < stc.Threshold {
+				continue
+			}
+			node := g.getNodeUnlocked(sr.NodeID)
+			if node == nil {
+				continue
+			}
+			row := map[string]interface{}{}
+			if query.ReturnClause != nil {
+				for _, item := range query.ReturnClause.Items {
+					col := item.Variable
+					if item.Property != "" {
+						col = item.Variable + "." + item.Property
+						row[col] = node.Properties[item.Property]
+					} else {
+						row[col] = node
+					}
+				}
+			} else {
+				row["node"] = node
+			}
+			row["similarity"] = sr.Similarity
+			result.Rows = append(result.Rows, row)
+		}
+	}
+
+	return result, nil
+}
+
+// ============================================================================
+// Temporal MATCH queries
+// ============================================================================
+
+// temporalSnapshot is an in-memory snapshot of graph data valid at a specific time.
+type temporalSnapshot struct {
+	nodes        map[string]*Node
+	nodesByLabel map[string][]string
+	nodeRelIndex map[string][]string
+	rels         map[string]*Relationship
+}
+
+// buildTemporalSnapshot filters nodes/rels to those valid at time t.
+func buildTemporalSnapshot(allNodes []*Node, allRels []*Relationship, t time.Time) *temporalSnapshot {
+	snap := &temporalSnapshot{
+		nodes:        make(map[string]*Node),
+		nodesByLabel: make(map[string][]string),
+		nodeRelIndex: make(map[string][]string),
+		rels:         make(map[string]*Relationship),
+	}
+	for _, n := range allNodes {
+		if n.IsValidAt(t) {
+			snap.nodes[n.ID] = n
+			for _, label := range n.Labels {
+				snap.nodesByLabel[label] = append(snap.nodesByLabel[label], n.ID)
+			}
+		}
+	}
+	for _, r := range allRels {
+		if r.IsValidAt(t) {
+			snap.rels[r.ID] = r
+			snap.nodeRelIndex[r.FromNodeID] = append(snap.nodeRelIndex[r.FromNodeID], r.ID)
+			snap.nodeRelIndex[r.ToNodeID] = append(snap.nodeRelIndex[r.ToNodeID], r.ID)
+		}
+	}
+	return snap
+}
+
+// executeTemporalMatchUnlocked handles MATCH ... AT TIME queries (caller holds read lock).
+func (g *DiskGraph) executeTemporalMatchUnlocked(query *Query) (*QueryResult, error) {
+	tc := query.TimeClause
+
+	var queryTime *time.Time
+	if tc.Mode == "EARLIEST" {
+		allNodes, _ := g.boltStore.GetAllNodes()
+		allRels, _ := g.boltStore.GetAllRelationships()
+		var earliest *time.Time
+		for _, n := range allNodes {
+			if earliest == nil || n.ValidFrom.Before(*earliest) {
+				t := n.ValidFrom
+				earliest = &t
+			}
+		}
+		for _, r := range allRels {
+			if earliest == nil || r.ValidFrom.Before(*earliest) {
+				t := r.ValidFrom
+				earliest = &t
+			}
+		}
+		queryTime = earliest
+	} else {
+		t := time.Unix(tc.Timestamp, 0)
+		queryTime = &t
+	}
+
+	if queryTime == nil {
+		return buildResult(nil, query.ReturnClause), nil
+	}
+
+	allNodes, _ := g.boltStore.GetAllNodes()
+	allRels, _ := g.boltStore.GetAllRelationships()
+	snap := buildTemporalSnapshot(allNodes, allRels, *queryTime)
+	matches := findMatchesInSnapshot(snap, query.MatchPattern, query.WhereClause)
+	return buildResult(matches, query.ReturnClause), nil
+}
+
+// findMatchesInSnapshot performs pattern matching against a temporal snapshot.
+func findMatchesInSnapshot(snap *temporalSnapshot, pattern *MatchPattern, where *WhereClause) []Match {
+	if pattern == nil || len(pattern.Nodes) == 0 {
+		return nil
+	}
+
+	firstPattern := pattern.Nodes[0]
+	var candidateNodes []*Node
+
+	if len(firstPattern.Labels) > 0 {
+		for _, id := range snap.nodesByLabel[firstPattern.Labels[0]] {
+			if n, ok := snap.nodes[id]; ok {
+				candidateNodes = append(candidateNodes, n)
+			}
+		}
+	} else {
+		for _, n := range snap.nodes {
+			candidateNodes = append(candidateNodes, n)
+		}
+	}
+
+	if len(firstPattern.Properties) > 0 {
+		var filtered []*Node
+		for _, n := range candidateNodes {
+			if matchesProperties(n.Properties, firstPattern.Properties) {
+				filtered = append(filtered, n)
+			}
+		}
+		candidateNodes = filtered
+	}
+
+	var matches []Match
+	for _, node := range candidateNodes {
+		m := Match{}
+		if firstPattern.Variable != "" {
+			m[firstPattern.Variable] = node
+		}
+		matches = append(matches, m)
+	}
+
+	if len(pattern.Nodes) == 1 && len(pattern.Relationships) == 0 {
+		if where != nil {
+			matches = filterMatchesInSnapshot(matches, where)
+		}
+		return matches
+	}
+
+	// Handle relationship patterns
+	for _, relPattern := range pattern.Relationships {
+		var newMatches []Match
+		for _, match := range matches {
+			fromVar := pattern.Nodes[relPattern.FromIndex].Variable
+			fromEntity, ok := match[fromVar]
+			if !ok {
+				continue
+			}
+			fromNode, ok := fromEntity.(*Node)
+			if !ok {
+				continue
+			}
+
+			for _, relID := range snap.nodeRelIndex[fromNode.ID] {
+				rel, ok := snap.rels[relID]
+				if !ok {
+					continue
+				}
+				if len(relPattern.Types) > 0 {
+					typeMatch := false
+					for _, t := range relPattern.Types {
+						if rel.Type == t {
+							typeMatch = true
+							break
+						}
+					}
+					if !typeMatch {
+						continue
+					}
+				}
+
+				var targetID string
+				switch relPattern.Direction {
+				case "->":
+					if rel.FromNodeID != fromNode.ID {
+						continue
+					}
+					targetID = rel.ToNodeID
+				case "<-":
+					if rel.ToNodeID != fromNode.ID {
+						continue
+					}
+					targetID = rel.FromNodeID
+				default:
+					if rel.FromNodeID == fromNode.ID {
+						targetID = rel.ToNodeID
+					} else {
+						targetID = rel.FromNodeID
+					}
+				}
+
+				targetNode, ok := snap.nodes[targetID]
+				if !ok {
+					continue
+				}
+				toPattern := pattern.Nodes[relPattern.ToIndex]
+				if len(toPattern.Labels) > 0 {
+					hasLabel := false
+					for _, reqLabel := range toPattern.Labels {
+						for _, nodeLabel := range targetNode.Labels {
+							if reqLabel == nodeLabel {
+								hasLabel = true
+								break
+							}
+						}
+						if hasLabel {
+							break
+						}
+					}
+					if !hasLabel {
+						continue
+					}
+				}
+				if len(toPattern.Properties) > 0 && !matchesProperties(targetNode.Properties, toPattern.Properties) {
+					continue
+				}
+
+				newMatch := make(Match)
+				for k, v := range match {
+					newMatch[k] = v
+				}
+				if toPattern.Variable != "" {
+					newMatch[toPattern.Variable] = targetNode
+				}
+				if relPattern.Variable != "" {
+					newMatch[relPattern.Variable] = rel
+				}
+				newMatches = append(newMatches, newMatch)
+			}
+		}
+		matches = newMatches
+	}
+
+	if where != nil {
+		matches = filterMatchesInSnapshot(matches, where)
+	}
+	return matches
+}
+
+// filterMatchesInSnapshot applies WHERE conditions to snapshot matches.
+func filterMatchesInSnapshot(matches []Match, where *WhereClause) []Match {
+	var result []Match
+	for _, match := range matches {
+		allMatch := true
+		for _, cond := range where.Conditions {
+			entity, ok := match[cond.Variable]
+			if !ok {
+				allMatch = false
+				break
+			}
+			var props map[string]interface{}
+			if node, ok := entity.(*Node); ok {
+				props = node.Properties
+			} else if rel, ok := entity.(*Relationship); ok {
+				props = rel.Properties
+			} else {
+				allMatch = false
+				break
+			}
+			if !evaluateCondition(props[cond.Property], cond.Operator, cond.Value) {
+				allMatch = false
+				break
+			}
+		}
+		if allMatch {
+			result = append(result, match)
+		}
+	}
+	return result
 }
 
 // findMatchesUnlocked finds pattern matches using indexes (caller must hold lock)
