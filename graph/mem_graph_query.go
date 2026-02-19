@@ -164,7 +164,7 @@ func (g *memGraph) executeMatchQuery(query *Query) (*QueryResult, error) {
 	}
 
 	// Build result based on RETURN clause
-	result := g.buildResult(matches, query.ReturnClause)
+	result := buildResult(matches, query.ReturnClause)
 
 	return result, nil
 }
@@ -818,7 +818,7 @@ func toFloat(v interface{}) (float64, bool) {
 
 // buildResult constructs the query result based on RETURN clause
 // Handles aggregation, DISTINCT, ORDER BY, SKIP, and LIMIT
-func (g *memGraph) buildResult(matches []Match, returnClause *ReturnClause) *QueryResult {
+func buildResult(matches []Match, returnClause *ReturnClause) *QueryResult {
 	result := &QueryResult{
 		Columns: []string{},
 		Rows:    []map[string]interface{}{},
@@ -846,11 +846,11 @@ func (g *memGraph) buildResult(matches []Match, returnClause *ReturnClause) *Que
 
 	if hasAggregation {
 		// Handle aggregation queries
-		result.Rows = g.buildAggregatedRows(matches, returnClause)
+		result.Rows = buildAggregatedRows(matches, returnClause)
 	} else {
 		// Build regular rows
 		for _, match := range matches {
-			row := g.buildRowFromMatch(match, returnClause.Items)
+			row := buildRowFromMatch(match, returnClause.Items)
 			result.Rows = append(result.Rows, row)
 		}
 	}
@@ -904,7 +904,7 @@ func getColumnName(item ReturnItem) string {
 }
 
 // buildRowFromMatch builds a single row from a match
-func (g *memGraph) buildRowFromMatch(match Match, items []ReturnItem) map[string]interface{} {
+func buildRowFromMatch(match Match, items []ReturnItem) map[string]interface{} {
 	row := map[string]interface{}{}
 
 	for _, item := range items {
@@ -1092,7 +1092,7 @@ func applyScalarFunction(name string, val interface{}) interface{} {
 }
 
 // buildAggregatedRows handles aggregation functions like COUNT, SUM, AVG, etc.
-func (g *memGraph) buildAggregatedRows(matches []Match, returnClause *ReturnClause) []map[string]interface{} {
+func buildAggregatedRows(matches []Match, returnClause *ReturnClause) []map[string]interface{} {
 	// Find grouping columns (non-aggregated items)
 	var groupByItems []ReturnItem
 	var aggItems []ReturnItem
@@ -1110,7 +1110,7 @@ func (g *memGraph) buildAggregatedRows(matches []Match, returnClause *ReturnClau
 		row := map[string]interface{}{}
 		for _, item := range aggItems {
 			colName := getColumnName(item)
-			row[colName] = g.computeAggregation(matches, item)
+			row[colName] = computeAggregation(matches, item)
 		}
 		return []map[string]interface{}{row}
 	}
@@ -1120,7 +1120,7 @@ func (g *memGraph) buildAggregatedRows(matches []Match, returnClause *ReturnClau
 	groupKeys := []string{} // Track order of keys
 
 	for _, match := range matches {
-		key := g.buildGroupKey(match, groupByItems)
+		key := buildGroupKey(match, groupByItems)
 		if _, exists := groups[key]; !exists {
 			groupKeys = append(groupKeys, key)
 		}
@@ -1160,7 +1160,7 @@ func (g *memGraph) buildAggregatedRows(matches []Match, returnClause *ReturnClau
 		// Compute aggregations for this group
 		for _, item := range aggItems {
 			colName := getColumnName(item)
-			row[colName] = g.computeAggregation(groupMatches, item)
+			row[colName] = computeAggregation(groupMatches, item)
 		}
 
 		rows = append(rows, row)
@@ -1170,7 +1170,7 @@ func (g *memGraph) buildAggregatedRows(matches []Match, returnClause *ReturnClau
 }
 
 // buildGroupKey creates a string key for grouping matches
-func (g *memGraph) buildGroupKey(match Match, groupByItems []ReturnItem) string {
+func buildGroupKey(match Match, groupByItems []ReturnItem) string {
 	var parts []string
 	for _, item := range groupByItems {
 		entity, ok := match[item.Variable]
@@ -1199,7 +1199,7 @@ func (g *memGraph) buildGroupKey(match Match, groupByItems []ReturnItem) string 
 }
 
 // computeAggregation computes an aggregation function over matches
-func (g *memGraph) computeAggregation(matches []Match, item ReturnItem) interface{} {
+func computeAggregation(matches []Match, item ReturnItem) interface{} {
 	switch strings.ToUpper(item.Aggregation) {
 	case "COUNT":
 		if item.Variable == "*" {
@@ -1217,7 +1217,7 @@ func (g *memGraph) computeAggregation(matches []Match, item ReturnItem) interfac
 	case "SUM":
 		var sum float64
 		for _, match := range matches {
-			val := g.getNumericValue(match, item)
+			val := getNumericValue(match, item)
 			if val != nil {
 				sum += *val
 			}
@@ -1228,7 +1228,7 @@ func (g *memGraph) computeAggregation(matches []Match, item ReturnItem) interfac
 		var sum float64
 		count := 0
 		for _, match := range matches {
-			val := g.getNumericValue(match, item)
+			val := getNumericValue(match, item)
 			if val != nil {
 				sum += *val
 				count++
@@ -1242,7 +1242,7 @@ func (g *memGraph) computeAggregation(matches []Match, item ReturnItem) interfac
 	case "MIN":
 		var min *float64
 		for _, match := range matches {
-			val := g.getNumericValue(match, item)
+			val := getNumericValue(match, item)
 			if val != nil {
 				if min == nil || *val < *min {
 					min = val
@@ -1257,7 +1257,7 @@ func (g *memGraph) computeAggregation(matches []Match, item ReturnItem) interfac
 	case "MAX":
 		var max *float64
 		for _, match := range matches {
-			val := g.getNumericValue(match, item)
+			val := getNumericValue(match, item)
 			if val != nil {
 				if max == nil || *val > *max {
 					max = val
@@ -1293,7 +1293,7 @@ func (g *memGraph) computeAggregation(matches []Match, item ReturnItem) interfac
 }
 
 // getNumericValue extracts a numeric value from a match for aggregation
-func (g *memGraph) getNumericValue(match Match, item ReturnItem) *float64 {
+func getNumericValue(match Match, item ReturnItem) *float64 {
 	entity, ok := match[item.Variable]
 	if !ok {
 		return nil
@@ -1771,7 +1771,7 @@ func (g *memGraph) executeSetQuery(query *Query) (*QueryResult, error) {
 	}
 
 	if query.ReturnClause != nil {
-		result = g.buildResult(matches, query.ReturnClause)
+		result = buildResult(matches, query.ReturnClause)
 	} else {
 		result.Columns = []string{"updated"}
 		result.Rows = append(result.Rows, map[string]interface{}{

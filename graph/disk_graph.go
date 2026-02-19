@@ -224,72 +224,18 @@ func (g *DiskGraph) GetAllRelationshipVersions() []*Relationship {
 	return rels
 }
 
-// loadIntoMemory creates an in-memory graph with current data (for complex operations)
-func (g *DiskGraph) loadIntoMemory() *memGraph {
-	memGraph := newMemGraph()
-
-	nodes, _ := g.boltStore.GetAllNodes()
-	for _, n := range nodes {
-		if n.ValidTo == nil {
-			memGraph.nodes[n.ID] = n
-			for _, label := range n.Labels {
-				if memGraph.nodesByLabel[label] == nil {
-					memGraph.nodesByLabel[label] = make(map[string]*Node)
-				}
-				memGraph.nodesByLabel[label][n.ID] = n
-			}
-		}
-	}
-
-	rels, _ := g.boltStore.GetAllRelationships()
-	for _, r := range rels {
-		if r.ValidTo == nil {
-			memGraph.relationships[r.ID] = r
-		}
-	}
-
-	return memGraph
-}
-
-// loadIntoMemoryUnlocked creates an in-memory graph (caller must hold lock)
-func (g *DiskGraph) loadIntoMemoryUnlocked() *memGraph {
-	memGraph := newMemGraph()
-
-	nodes, _ := g.boltStore.GetAllNodes()
-	for _, n := range nodes {
-		if n.ValidTo == nil {
-			memGraph.nodes[n.ID] = n
-			for _, label := range n.Labels {
-				if memGraph.nodesByLabel[label] == nil {
-					memGraph.nodesByLabel[label] = make(map[string]*Node)
-				}
-				memGraph.nodesByLabel[label][n.ID] = n
-			}
-		}
-	}
-
-	rels, _ := g.boltStore.GetAllRelationships()
-	for _, r := range rels {
-		if r.ValidTo == nil {
-			memGraph.relationships[r.ID] = r
-		}
-	}
-
-	return memGraph
-}
-
-// ShortestPath finds the shortest path between two nodes
+// ShortestPath finds the shortest path between two nodes using BFS + LRU cache.
 func (g *DiskGraph) ShortestPath(fromID, toID string) *Path {
-	// Delegate to in-memory graph for path finding (complex traversal operation)
-	memGraph := g.loadIntoMemory()
-	return memGraph.ShortestPath(fromID, toID)
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.diskShortestPath(fromID, toID)
 }
 
-// AllPaths finds all paths between two nodes up to maxDepth
+// AllPaths finds all paths between two nodes up to maxDepth using DFS + LRU cache.
 func (g *DiskGraph) AllPaths(fromID, toID string, maxDepth int) []*Path {
-	// Delegate to in-memory graph for path finding (complex traversal operation)
-	memGraph := g.loadIntoMemory()
-	return memGraph.AllPaths(fromID, toID, maxDepth)
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.diskAllPaths(fromID, toID, maxDepth)
 }
 
 // PathExists checks if any path exists between two nodes
