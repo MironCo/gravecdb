@@ -2,7 +2,9 @@ package graph
 
 import (
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -88,14 +90,25 @@ func buildRowFromMatch(match Match, items []ReturnItem) map[string]interface{} {
 	for _, item := range items {
 		colName := getColumnName(item)
 
-		// Scalar function evaluation (DURATION, etc.)
+		// Scalar function evaluation (toUpper, abs, duration, etc.)
 		if item.FunctionName != "" {
 			entity, ok := match[item.Variable]
 			if !ok {
 				row[colName] = nil
 				continue
 			}
-			row[colName] = applyScalarFunction(item.FunctionName, entity)
+			// Extract property value first if a property is specified (e.g. toUpper(p.name))
+			var rawValue interface{}
+			if item.Property != "" {
+				if node, ok := entity.(*Node); ok {
+					rawValue = node.Properties[item.Property]
+				} else if rel, ok := entity.(*Relationship); ok {
+					rawValue = rel.Properties[item.Property]
+				}
+			} else {
+				rawValue = entity
+			}
+			row[colName] = applyScalarFunction(item.FunctionName, rawValue)
 			continue
 		}
 
@@ -117,13 +130,16 @@ func buildRowFromMatch(match Match, items []ReturnItem) map[string]interface{} {
 	return row
 }
 
-// applyScalarFunction evaluates a scalar function against an entity or value.
-func applyScalarFunction(fn string, entity interface{}) interface{} {
+// applyScalarFunction evaluates a scalar function against a value.
+// value may be a plain scalar (string, int, float64) or a *Node/*Relationship for DURATION.
+func applyScalarFunction(fn string, value interface{}) interface{} {
 	switch fn {
+
+	// ── temporal ──────────────────────────────────────────────────────────────
 	case "duration":
 		var validFrom time.Time
 		var validTo *time.Time
-		switch e := entity.(type) {
+		switch e := value.(type) {
 		case *Node:
 			validFrom = e.ValidFrom
 			validTo = e.ValidTo
@@ -138,8 +154,247 @@ func applyScalarFunction(fn string, entity interface{}) interface{} {
 			end = *validTo
 		}
 		return end.Sub(validFrom).Hours() / 24 // days
+
+	// ── string functions ──────────────────────────────────────────────────────
+	case "toupper":
+		s, ok := scalarToString(value)
+		if !ok {
+			return nil
+		}
+		return strings.ToUpper(s)
+
+	case "tolower":
+		s, ok := scalarToString(value)
+		if !ok {
+			return nil
+		}
+		return strings.ToLower(s)
+
+	case "trim":
+		s, ok := scalarToString(value)
+		if !ok {
+			return nil
+		}
+		return strings.TrimSpace(s)
+
+	case "ltrim":
+		s, ok := scalarToString(value)
+		if !ok {
+			return nil
+		}
+		return strings.TrimLeft(s, " \t")
+
+	case "rtrim":
+		s, ok := scalarToString(value)
+		if !ok {
+			return nil
+		}
+		return strings.TrimRight(s, " \t")
+
+	case "reverse":
+		s, ok := scalarToString(value)
+		if !ok {
+			return nil
+		}
+		runes := []rune(s)
+		for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+			runes[i], runes[j] = runes[j], runes[i]
+		}
+		return string(runes)
+
+	case "tostring":
+		if value == nil {
+			return nil
+		}
+		return fmt.Sprint(value)
+
+	case "size":
+		switch v := value.(type) {
+		case string:
+			return len(v)
+		case []interface{}:
+			return len(v)
+		default:
+			if s, ok := scalarToString(v); ok {
+				return len(s)
+			}
+			return nil
+		}
+
+	case "tointeger":
+		return scalarToInteger(value)
+
+	case "tofloat":
+		return scalarToFloat(value)
+
+	case "toboolean":
+		switch v := value.(type) {
+		case bool:
+			return v
+		case string:
+			l := strings.ToLower(v)
+			if l == "true" {
+				return true
+			}
+			if l == "false" {
+				return false
+			}
+			return nil
+		default:
+			return nil
+		}
+
+	// ── math functions ────────────────────────────────────────────────────────
+	case "abs":
+		f, ok := scalarToNumeric(value)
+		if !ok {
+			return nil
+		}
+		return math.Abs(f)
+
+	case "ceil":
+		f, ok := scalarToNumeric(value)
+		if !ok {
+			return nil
+		}
+		return math.Ceil(f)
+
+	case "floor":
+		f, ok := scalarToNumeric(value)
+		if !ok {
+			return nil
+		}
+		return math.Floor(f)
+
+	case "round":
+		f, ok := scalarToNumeric(value)
+		if !ok {
+			return nil
+		}
+		return math.Round(f)
+
+	case "sqrt":
+		f, ok := scalarToNumeric(value)
+		if !ok {
+			return nil
+		}
+		return math.Sqrt(f)
+
+	case "sign":
+		f, ok := scalarToNumeric(value)
+		if !ok {
+			return nil
+		}
+		if f < 0 {
+			return -1.0
+		}
+		if f > 0 {
+			return 1.0
+		}
+		return 0.0
+
+	case "log":
+		f, ok := scalarToNumeric(value)
+		if !ok {
+			return nil
+		}
+		return math.Log(f)
+
+	case "log10":
+		f, ok := scalarToNumeric(value)
+		if !ok {
+			return nil
+		}
+		return math.Log10(f)
+
+	case "exp":
+		f, ok := scalarToNumeric(value)
+		if !ok {
+			return nil
+		}
+		return math.Exp(f)
 	}
 	return nil
+}
+
+// scalarToString coerces a value to string. Returns (s, true) for string types,
+// falls back to fmt.Sprint for non-nil non-node values.
+func scalarToString(v interface{}) (string, bool) {
+	if v == nil {
+		return "", false
+	}
+	switch s := v.(type) {
+	case string:
+		return s, true
+	case *Node, *Relationship:
+		return "", false // don't stringify graph objects
+	default:
+		return fmt.Sprint(s), true
+	}
+}
+
+// scalarToNumeric coerces a value to float64. Returns (f, true) on success.
+func scalarToNumeric(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case string:
+		f, err := strconv.ParseFloat(n, 64)
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
+// scalarToInteger coerces a value to int.
+func scalarToInteger(v interface{}) interface{} {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	case float32:
+		return int(n)
+	case string:
+		if i, err := strconv.ParseInt(n, 10, 64); err == nil {
+			return int(i)
+		}
+		if f, err := strconv.ParseFloat(n, 64); err == nil {
+			return int(f)
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+// scalarToFloat coerces a value to float64.
+func scalarToFloat(v interface{}) interface{} {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case string:
+		if f, err := strconv.ParseFloat(n, 64); err == nil {
+			return f
+		}
+		return nil
+	default:
+		return nil
+	}
 }
 
 // buildAggregatedRows handles aggregation functions (COUNT, SUM, AVG, MIN, MAX, COLLECT).
@@ -424,4 +679,13 @@ func getOrderValue(row map[string]interface{}, colName string, order OrderItem) 
 		}
 	}
 	return nil
+}
+
+// copyMatch creates a shallow copy of a Match map.
+func copyMatch(m Match) Match {
+	cp := make(Match, len(m))
+	for k, v := range m {
+		cp[k] = v
+	}
+	return cp
 }

@@ -199,6 +199,68 @@ def main():
         print(f"  Found after double MERGE: {node2}")
         print(f"  PASS (idempotent - still 1 node after 2 MERGEs)")
 
+        # Test 15: toUpper / toLower on property values
+        print("\n[Test 15] String functions: toUpper, toLower, size")
+        print("-" * 40)
+        result = session.run("UNWIND ['alice', 'Bob', 'CHARLIE'] AS name RETURN toUpper(name) AS up, toLower(name) AS lo, size(name) AS n")
+        rows = list(result)
+        assert len(rows) == 3, f"Expected 3 rows, got {len(rows)}"
+        for r in rows:
+            assert r["up"] == r["up"].upper(), f"toUpper failed: {r['up']}"
+            assert r["lo"] == r["lo"].lower(), f"toLower failed: {r['lo']}"
+            assert isinstance(r["n"], int) and r["n"] > 0, f"size failed: {r['n']}"
+            print(f"  up={r['up']!r}  lo={r['lo']!r}  size={r['n']}")
+        print(f"  PASS ({len(rows)} rows)")
+
+        # Test 16: Math functions: abs, round, ceil, floor
+        print("\n[Test 16] Math functions: abs, round, ceil, floor")
+        print("-" * 40)
+        result = session.run("UNWIND [-3.7, 2.3, 0.0] AS x RETURN x, abs(x) AS a, round(x) AS r, ceil(x) AS c, floor(x) AS f")
+        rows = list(result)
+        assert len(rows) == 3, f"Expected 3 rows, got {len(rows)}"
+        for row in rows:
+            assert row["a"] >= 0, f"abs({row['x']}) = {row['a']} should be >= 0"
+            print(f"  x={row['x']}  abs={row['a']}  round={row['r']}  ceil={row['c']}  floor={row['f']}")
+        # spot-check
+        by_x = {r["x"]: r for r in rows}
+        assert by_x[-3.7]["a"] == 3.7,  f"abs(-3.7) should be 3.7, got {by_x[-3.7]['a']}"
+        assert by_x[-3.7]["r"] == -4.0, f"round(-3.7) should be -4, got {by_x[-3.7]['r']}"
+        assert by_x[2.3]["c"]  == 3.0,  f"ceil(2.3) should be 3, got {by_x[2.3]['c']}"
+        assert by_x[2.3]["f"]  == 2.0,  f"floor(2.3) should be 2, got {by_x[2.3]['f']}"
+        print(f"  PASS ({len(rows)} rows)")
+
+        # Test 17: toInteger / toFloat / toString / reverse
+        print("\n[Test 17] Type-conversion functions: toInteger, toFloat, toString, reverse")
+        print("-" * 40)
+        result = session.run("UNWIND ['42', '3.14', 'hello'] AS s RETURN toInteger(s) AS i, toFloat(s) AS f, reverse(s) AS rev")
+        rows = list(result)
+        assert len(rows) == 3, f"Expected 3 rows, got {len(rows)}"
+        by_val = {}
+        for r in rows:
+            print(f"  toInteger={r['i']}  toFloat={r['f']}  reverse={r['rev']!r}")
+            by_val[r["rev"]] = r
+        assert by_val.get("24"), "reverse of '42' should be '24'"
+        assert by_val["24"]["i"] == 42, f"toInteger('42') should be 42"
+        assert abs(by_val["41.3"]["f"] - 3.14) < 0.001, f"toFloat('3.14') ≈ 3.14"
+        assert by_val["olleh"]["rev"] == "olleh", "reverse of 'hello' should be 'olleh'"
+        print(f"  PASS ({len(rows)} rows)")
+
+        # Test 18: WITH clause — friends-of-friends style chained MATCH
+        print("\n[Test 18] WITH clause — chained MATCH via WITH")
+        print("-" * 40)
+        result = session.run(
+            "MATCH (a:Person)-[:KNOWS]->(b:Person) WITH b MATCH (b)-[:WORKS_AT]->(c:Company) RETURN b.name AS person, c.name AS company"
+        )
+        rows = list(result)
+        if len(rows) == 0:
+            print("  SKIP (no Person-KNOWS-Person-WORKS_AT-Company paths in dataset)")
+        else:
+            for r in rows:
+                assert r["person"] is not None, "person should not be None"
+                assert r["company"] is not None, "company should not be None"
+                print(f"  {r['person']} works at {r['company']}")
+            print(f"  PASS ({len(rows)} rows)")
+
     driver.close()
     print("\n" + "=" * 50)
     print("All tests completed!")

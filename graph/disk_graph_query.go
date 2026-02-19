@@ -15,6 +15,8 @@ func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*
 	// For read queries (MATCH without mutations), use in-memory graph
 
 	switch query.QueryType {
+	case "PIPELINE":
+		return g.executePipelineQuery(query, embedder)
 	case "UNWIND":
 		return g.executeUnwindQuery(query)
 	case "MERGE":
@@ -1319,6 +1321,236 @@ func filterMatchesInSnapshot(matches []Match, where *WhereClause) []Match {
 		}
 	}
 	return result
+}
+
+// ============================================================================
+// Pipeline (WITH clause) execution
+// ============================================================================
+
+// executePipelineQuery handles queries that chain MATCH stages via WITH.
+func (g *DiskGraph) executePipelineQuery(query *Query, embedder Embedder) (*QueryResult, error) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	pipeline := query.Pipeline
+
+	// Start with one empty binding so stage 0 can merge into it
+	currentBindings := []Match{{}}
+
+	for _, stage := range pipeline.Stages {
+		var nextBindings []Match
+
+		for _, binding := range currentBindings {
+			var matches []Match
+			if stage.MatchPattern != nil {
+				matches = g.findMatchesWithExisting(stage.MatchPattern, stage.WhereClause, binding)
+			} else {
+				matches = []Match{copyMatch(binding)}
+			}
+
+			for _, match := range matches {
+				if len(stage.WithVars) > 0 {
+					// Project through WITH — keep only the listed variables
+					projected := make(Match, len(stage.WithVars))
+					for _, v := range stage.WithVars {
+						if val, ok := match[v]; ok {
+							projected[v] = val
+						}
+					}
+					nextBindings = append(nextBindings, projected)
+				} else {
+					// Final stage (no explicit WITH) — keep everything
+					nextBindings = append(nextBindings, match)
+				}
+			}
+		}
+
+		currentBindings = nextBindings
+	}
+
+	return buildResult(currentBindings, query.ReturnClause), nil
+}
+
+// findMatchesWithExisting is like findMatchesUnlocked but seeds the search with
+// an existing binding. If the first node pattern's variable is already bound, that
+// node is used as the anchor; otherwise the normal label/property index scan runs.
+func (g *DiskGraph) findMatchesWithExisting(pattern *MatchPattern, where *WhereClause, existing Match) []Match {
+	if pattern == nil || len(pattern.Nodes) == 0 {
+		return []Match{copyMatch(existing)}
+	}
+
+	firstPattern := pattern.Nodes[0]
+	var candidateNodes []*Node
+
+	// Anchor: use the already-bound node directly
+	if firstPattern.Variable != "" {
+		if entity, ok := existing[firstPattern.Variable]; ok {
+			if node, ok := entity.(*Node); ok {
+				candidateNodes = []*Node{node}
+			}
+		}
+	}
+
+	// Fall back to label/property index scan
+	if candidateNodes == nil {
+		if len(firstPattern.Labels) > 0 {
+			nodeIDs := g.labelIndex[firstPattern.Labels[0]]
+			for _, id := range nodeIDs {
+				if n := g.getNodeUnlocked(id); n != nil && n.ValidTo == nil {
+					candidateNodes = append(candidateNodes, n)
+				}
+			}
+		} else {
+			allNodes, _ := g.boltStore.GetAllNodes()
+			for _, n := range allNodes {
+				if n.ValidTo == nil {
+					candidateNodes = append(candidateNodes, n)
+				}
+			}
+		}
+		if len(firstPattern.Properties) > 0 {
+			var filtered []*Node
+			for _, n := range candidateNodes {
+				if matchesProperties(n.Properties, firstPattern.Properties) {
+					filtered = append(filtered, n)
+				}
+			}
+			candidateNodes = filtered
+		}
+	}
+
+	// Seed initial matches from existing binding
+	var matches []Match
+	for _, node := range candidateNodes {
+		m := copyMatch(existing)
+		if firstPattern.Variable != "" {
+			m[firstPattern.Variable] = node
+		}
+		matches = append(matches, m)
+	}
+
+	// Single-node pattern
+	if len(pattern.Nodes) == 1 && len(pattern.Relationships) == 0 {
+		if where != nil {
+			matches = g.filterMatchesUnlocked(matches, where)
+		}
+		return matches
+	}
+
+	// Expand relationship patterns
+	for _, relPattern := range pattern.Relationships {
+		var newMatches []Match
+
+		for _, match := range matches {
+			fromIdx := relPattern.FromIndex
+			if fromIdx >= len(pattern.Nodes) {
+				continue
+			}
+			fromVar := pattern.Nodes[fromIdx].Variable
+			fromEntity, ok := match[fromVar]
+			if !ok {
+				continue
+			}
+			fromNode, ok := fromEntity.(*Node)
+			if !ok {
+				continue
+			}
+
+			rels := g.getRelationshipsForNodeUnlocked(fromNode.ID)
+			for _, rel := range rels {
+				if len(relPattern.Types) > 0 {
+					typeMatch := false
+					for _, t := range relPattern.Types {
+						if rel.Type == t {
+							typeMatch = true
+							break
+						}
+					}
+					if !typeMatch {
+						continue
+					}
+				}
+
+				var targetNodeID string
+				if relPattern.Direction == "->" {
+					if rel.FromNodeID != fromNode.ID {
+						continue
+					}
+					targetNodeID = rel.ToNodeID
+				} else if relPattern.Direction == "<-" {
+					if rel.ToNodeID != fromNode.ID {
+						continue
+					}
+					targetNodeID = rel.FromNodeID
+				} else {
+					if rel.FromNodeID == fromNode.ID {
+						targetNodeID = rel.ToNodeID
+					} else {
+						targetNodeID = rel.FromNodeID
+					}
+				}
+
+				targetNode := g.getNodeUnlocked(targetNodeID)
+				if targetNode == nil || targetNode.ValidTo != nil {
+					continue
+				}
+
+				toIdx := relPattern.ToIndex
+				if toIdx >= len(pattern.Nodes) {
+					continue
+				}
+				toPattern := pattern.Nodes[toIdx]
+
+				// If the target variable is already bound, it must match
+				if toPattern.Variable != "" {
+					if boundEntity, ok := existing[toPattern.Variable]; ok {
+						if boundNode, ok := boundEntity.(*Node); ok {
+							if targetNode.ID != boundNode.ID {
+								continue
+							}
+						}
+					}
+				}
+
+				if len(toPattern.Labels) > 0 {
+					hasLabel := false
+					for _, reqLabel := range toPattern.Labels {
+						for _, nodeLabel := range targetNode.Labels {
+							if reqLabel == nodeLabel {
+								hasLabel = true
+								break
+							}
+						}
+						if hasLabel {
+							break
+						}
+					}
+					if !hasLabel {
+						continue
+					}
+				}
+
+				if len(toPattern.Properties) > 0 && !matchesProperties(targetNode.Properties, toPattern.Properties) {
+					continue
+				}
+
+				newMatch := copyMatch(match)
+				if toPattern.Variable != "" {
+					newMatch[toPattern.Variable] = targetNode
+				}
+				if relPattern.Variable != "" {
+					newMatch[relPattern.Variable] = rel
+				}
+				newMatches = append(newMatches, newMatch)
+			}
+		}
+		matches = newMatches
+	}
+
+	if where != nil {
+		matches = g.filterMatchesUnlocked(matches, where)
+	}
+	return matches
 }
 
 // findMatchesUnlocked finds pattern matches using indexes (caller must hold lock)

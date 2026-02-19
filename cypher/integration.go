@@ -31,7 +31,23 @@ type GraphQuery struct {
 	SimilarToClause *GraphSimilarToClause
 	UnwindClause    *GraphUnwindClause
 	MergeClause     *GraphCreateClause // reuses create structure; execution differs
+	Pipeline        *GraphPipeline     // set when WITH clause is present
 	IsPathQuery     bool
+}
+
+// GraphPipelineStage is one MATCH+WHERE step in a WITH-chained query.
+// WithVars lists the variable names projected by the WITH clause after this stage
+// (empty means this is the final stage before RETURN).
+type GraphPipelineStage struct {
+	MatchPattern *GraphMatchPattern
+	WhereClause  *GraphWhereClause
+	WithVars     []string // variables kept after WITH projection
+}
+
+// GraphPipeline represents a multi-stage query connected by WITH clauses.
+type GraphPipeline struct {
+	Stages      []GraphPipelineStage
+	FinalReturn *GraphReturnClause
 }
 
 type GraphMatchPattern struct {
@@ -165,6 +181,13 @@ type GraphSimilarToClause struct {
 
 // ConvertToGraphQuery converts the AST to graph-compatible query
 func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
+	// If the query contains a WITH clause, build a multi-stage pipeline instead
+	for _, clause := range ast.Clauses {
+		if _, ok := clause.(*WithClause); ok {
+			return buildPipelineQuery(ast)
+		}
+	}
+
 	gq := &GraphQuery{}
 
 	for _, clause := range ast.Clauses {
@@ -709,6 +732,17 @@ func extractExprValue(expr Expression) interface{} {
 		return m
 	case *Identifier:
 		return e.Name
+	case *UnaryExpression:
+		if e.Operator == "-" {
+			inner := extractExprValue(e.Operand)
+			switch v := inner.(type) {
+			case int:
+				return -v
+			case float64:
+				return -v
+			}
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -722,4 +756,64 @@ func Validate(input string) error {
 		return fmt.Errorf("invalid query: %w", err)
 	}
 	return nil
+}
+
+// buildPipelineQuery converts a WITH-chained query into a GraphQuery with Pipeline set.
+// It walks clauses in order, grouping each MATCH+WHERE into a stage terminated by WITH.
+// The final RETURN is stored in Pipeline.FinalReturn and also in GraphQuery.ReturnClause
+// (so buildResult can be called directly with query.ReturnClause as usual).
+func buildPipelineQuery(ast *Query) (*GraphQuery, error) {
+	gq := &GraphQuery{QueryType: "PIPELINE"}
+	pipeline := &GraphPipeline{}
+
+	var currentStage GraphPipelineStage
+	stageHasMatch := false
+
+	for _, clause := range ast.Clauses {
+		switch c := clause.(type) {
+		case *MatchClause:
+			if stageHasMatch {
+				// Already have a match — this shouldn't happen before a WITH,
+				// but flush the current stage defensively.
+				pipeline.Stages = append(pipeline.Stages, currentStage)
+				currentStage = GraphPipelineStage{}
+			}
+			pattern, err := convertPatternToGraph(c.Pattern)
+			if err != nil {
+				return nil, err
+			}
+			currentStage.MatchPattern = pattern
+			stageHasMatch = true
+
+		case *WhereClause:
+			wc, err := convertWhereToGraph(c)
+			if err != nil {
+				return nil, err
+			}
+			currentStage.WhereClause = wc
+
+		case *WithClause:
+			// Extract projected variable names from WITH items
+			for _, item := range c.Items {
+				if ident, ok := item.Expression.(*Identifier); ok {
+					currentStage.WithVars = append(currentStage.WithVars, ident.Name)
+				}
+			}
+			pipeline.Stages = append(pipeline.Stages, currentStage)
+			currentStage = GraphPipelineStage{}
+			stageHasMatch = false
+
+		case *ReturnClause:
+			pipeline.FinalReturn = convertReturnToGraph(c)
+			gq.ReturnClause = pipeline.FinalReturn
+		}
+	}
+
+	// Flush any trailing stage (MATCH after the last WITH, before RETURN)
+	if stageHasMatch {
+		pipeline.Stages = append(pipeline.Stages, currentStage)
+	}
+
+	gq.Pipeline = pipeline
+	return gq, nil
 }
