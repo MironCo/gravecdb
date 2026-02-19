@@ -135,69 +135,45 @@ func (g *DiskGraph) Stats() (map[string]interface{}, error) {
 	}, nil
 }
 
-// AsOf returns a temporal view of the graph at a specific time
-// For disk mode, we load the snapshot into memory (hybrid approach)
+// AsOf returns a temporal view of the graph at a specific time.
 func (g *DiskGraph) AsOf(t time.Time) *TemporalView {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
-	// Create a new in-memory graph
-	snapshot := newMemGraph()
+	tv := &TemporalView{
+		asOf:          t,
+		nodes:         make(map[string]*Node),
+		nodesByLabel:  make(map[string][]*Node),
+		relationships: make(map[string]*Relationship),
+		relsByNode:    make(map[string][]*Relationship),
+	}
 
-	// Load all nodes from disk and filter by time
 	allNodes, err := g.boltStore.GetAllNodes()
 	if err != nil {
-		return snapshot.asOf(t)
+		return tv
 	}
-
 	for _, node := range allNodes {
 		if node.IsValidAt(t) {
-			snapshot.nodes[node.ID] = node
-			// Also add to nodeVersions so TemporalView.GetAllNodes() can find them
-			if snapshot.nodeVersions[node.ID] == nil {
-				snapshot.nodeVersions[node.ID] = []*Node{}
-			}
-			snapshot.nodeVersions[node.ID] = append(snapshot.nodeVersions[node.ID], node)
-
+			tv.nodes[node.ID] = node
 			for _, label := range node.Labels {
-				if snapshot.nodesByLabel[label] == nil {
-					snapshot.nodesByLabel[label] = make(map[string]*Node)
-				}
-				snapshot.nodesByLabel[label][node.ID] = node
+				tv.nodesByLabel[label] = append(tv.nodesByLabel[label], node)
 			}
 		}
 	}
 
-	// Load all relationships from disk and filter by time
 	allRels, err := g.boltStore.GetAllRelationships()
 	if err != nil {
-		return snapshot.asOf(t)
+		return tv
 	}
-
 	for _, rel := range allRels {
 		if rel.IsValidAt(t) {
-			snapshot.relationships[rel.ID] = rel
-			// Also add to relationshipVersions so TemporalView.GetAllRelationships() can find them
-			if snapshot.relationshipVersions[rel.ID] == nil {
-				snapshot.relationshipVersions[rel.ID] = []*Relationship{}
-			}
-			snapshot.relationshipVersions[rel.ID] = append(snapshot.relationshipVersions[rel.ID], rel)
+			tv.relationships[rel.ID] = rel
+			tv.relsByNode[rel.FromNodeID] = append(tv.relsByNode[rel.FromNodeID], rel)
+			tv.relsByNode[rel.ToNodeID] = append(tv.relsByNode[rel.ToNodeID], rel)
 		}
 	}
 
-	// Load embeddings
-	allEmbs, err := g.boltStore.GetAllEmbeddings()
-	if err != nil {
-		return snapshot.asOf(t)
-	}
-
-	for nodeID, embeddings := range allEmbs {
-		for _, emb := range embeddings {
-			snapshot.embeddings.Add(nodeID, emb.Vector, emb.Model, emb.PropertySnapshot)
-		}
-	}
-
-	return snapshot.asOf(t)
+	return tv
 }
 
 // GetAllNodeVersions returns all versions of all nodes (for building timelines)
@@ -224,14 +200,14 @@ func (g *DiskGraph) GetAllRelationshipVersions() []*Relationship {
 	return rels
 }
 
-// ShortestPath finds the shortest path between two nodes using BFS + LRU cache.
+// ShortestPath finds the shortest path between two nodes using disk-native BFS.
 func (g *DiskGraph) ShortestPath(fromID, toID string) *Path {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return g.diskShortestPath(fromID, toID)
 }
 
-// AllPaths finds all paths between two nodes up to maxDepth using DFS + LRU cache.
+// AllPaths finds all paths between two nodes up to maxDepth using disk-native DFS.
 func (g *DiskGraph) AllPaths(fromID, toID string, maxDepth int) []*Path {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
