@@ -48,6 +48,7 @@ type PropertyUpdate = cypher.GraphPropertyUpdate
 type DeleteClause = cypher.GraphDeleteClause
 type EmbedClause = cypher.GraphEmbedClause
 type SimilarToClause = cypher.GraphSimilarToClause
+type GraphSemanticCondition = cypher.GraphSemanticCondition
 
 // valuesEqual compares two values for equality, handling type differences
 func valuesEqual(a, b interface{}) bool {

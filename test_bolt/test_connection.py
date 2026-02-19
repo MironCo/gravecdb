@@ -59,6 +59,67 @@ def main():
         for record in result:
             print(f"  Found: {record['p']}")
 
+        # Test 7: DURATION on relationships
+        print("\n[Test 7] DURATION(r) - how long each person has worked at their company")
+        print("-" * 40)
+        result = session.run(
+            "MATCH (p:Person)-[r:WORKS_AT]->(c:Company) RETURN p.name, c.name, DURATION(r) AS tenure_days ORDER BY tenure_days DESC"
+        )
+        rows = list(result)
+        assert len(rows) > 0, "Expected WORKS_AT relationships"
+        for record in rows:
+            days = record["tenure_days"]
+            assert days is not None, f"DURATION returned None for {record['p.name']}"
+            assert days >= 0, f"DURATION returned negative value {days}"
+            print(f"  {record['p.name']} @ {record['c.name']}: {days:.2f} days")
+        print(f"  PASS ({len(rows)} rows)")
+
+        # Test 8: DURATION on nodes
+        print("\n[Test 8] DURATION(p) - how long each Person node has existed")
+        print("-" * 40)
+        result = session.run(
+            "MATCH (p:Person) RETURN p.name, DURATION(p) AS age_days ORDER BY age_days DESC"
+        )
+        rows = list(result)
+        assert len(rows) > 0, "Expected Person nodes"
+        for record in rows:
+            days = record["age_days"]
+            assert days is not None, f"DURATION returned None for {record['p.name']}"
+            assert days >= 0, f"DURATION returned negative value {days}"
+            print(f"  {record['p.name']}: {days:.4f} days old")
+        print(f"  PASS ({len(rows)} rows)")
+
+        # Test 9: SIMILAR TO semantic search (top-level, not WHERE)
+        print("\n[Test 9] SIMILAR TO - semantic search for 'software engineer'")
+        print("-" * 40)
+        result = session.run(
+            'MATCH (p:Person) SIMILAR TO "software engineer" RETURN p.name, similarity'
+        )
+        rows = list(result)
+        if len(rows) == 0:
+            print("  SKIP (no embeddings - run EMBED first)")
+        else:
+            for record in rows:
+                sim = record["similarity"]
+                assert 0.0 <= sim <= 1.0, f"similarity {sim} out of range"
+                print(f"  {record['p.name']}: {sim:.4f}")
+            print(f"  PASS ({len(rows)} rows)")
+
+        # Test 10: SIMILAR TO THROUGH TIME
+        print("\n[Test 10] SIMILAR TO THROUGH TIME - historical semantic search")
+        print("-" * 40)
+        result = session.run(
+            'MATCH (p:Person) SIMILAR TO "engineer" THROUGH TIME RETURN p.name, similarity, valid_from, valid_to'
+        )
+        rows = list(result)
+        if len(rows) == 0:
+            print("  SKIP (no embeddings - run EMBED first)")
+        else:
+            for record in rows:
+                assert record["valid_from"] is not None, "valid_from should not be None"
+                print(f"  {record['p.name']}: sim={record['similarity']:.4f} from={record['valid_from']}")
+            print(f"  PASS ({len(rows)} rows)")
+
     driver.close()
     print("\n" + "=" * 50)
     print("All tests completed!")

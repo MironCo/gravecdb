@@ -404,6 +404,16 @@ type ComparisonExpression struct {
 func (c *ComparisonExpression) node()       {}
 func (c *ComparisonExpression) expression() {}
 
+// SimilarToExpression represents `variable SIMILAR TO "query"` inside a WHERE clause
+type SimilarToExpression struct {
+	Variable  string
+	Query     string
+	Threshold float32
+}
+
+func (s *SimilarToExpression) node()       {}
+func (s *SimilarToExpression) expression() {}
+
 // FunctionCall represents a function call: count(n), toUpper(s)
 type FunctionCall struct {
 	Name      string

@@ -744,6 +744,7 @@ var precedences = map[TokenType]int{
 	TOKEN_LTE:      COMPARISON,
 	TOKEN_GTE:      COMPARISON,
 	TOKEN_IN:       COMPARISON,
+	TOKEN_SIMILAR:  COMPARISON,
 	TOKEN_CONTAINS: COMPARISON,
 	TOKEN_STARTS:   COMPARISON,
 	TOKEN_ENDS:     COMPARISON,
@@ -838,6 +839,8 @@ func (p *Parser) parseExpression(precedence int) Expression {
 			left = p.parseStartsWithExpression(left)
 		case TOKEN_ENDS:
 			left = p.parseEndsWithExpression(left)
+		case TOKEN_SIMILAR:
+			left = p.parseSimilarToInWhereExpression(left)
 		default:
 			return left
 		}
@@ -1085,6 +1088,48 @@ func (p *Parser) parseEndsWithExpression(left Expression) Expression {
 	p.nextToken()
 	right := p.parseExpression(COMPARISON)
 	return &ComparisonExpression{Left: left, Operator: "ENDS WITH", Right: right}
+}
+
+// parseSimilarToInWhereExpression parses `variable SIMILAR TO "query" [THRESHOLD x]`
+// inside a WHERE clause, producing a SimilarToExpression.
+func (p *Parser) parseSimilarToInWhereExpression(left Expression) Expression {
+	ident, ok := left.(*Identifier)
+	if !ok {
+		p.addError("expected identifier before SIMILAR TO")
+		return nil
+	}
+	p.nextToken() // consume SIMILAR
+	if !p.curTokenIs(TOKEN_TO) {
+		p.addError("expected TO after SIMILAR")
+		return nil
+	}
+	p.nextToken() // consume TO
+
+	queryExpr := p.parseExpression(COMPARISON)
+	str, ok := queryExpr.(*StringLiteral)
+	if !ok {
+		p.addError("expected string literal after SIMILAR TO")
+		return nil
+	}
+
+	expr := &SimilarToExpression{
+		Variable:  ident.Name,
+		Query:     str.Value,
+		Threshold: 0, // 0 means no minimum threshold
+	}
+
+	if p.curTokenIs(TOKEN_THRESHOLD) {
+		p.nextToken()
+		threshExpr := p.parseExpression(LOWEST)
+		switch v := threshExpr.(type) {
+		case *FloatLiteral:
+			expr.Threshold = float32(v.Value)
+		case *IntegerLiteral:
+			expr.Threshold = float32(v.Value)
+		}
+	}
+
+	return expr
 }
 
 func (p *Parser) parseFunctionCall() Expression {

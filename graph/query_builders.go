@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // buildResult constructs the query result based on RETURN clause.
@@ -69,6 +70,12 @@ func getColumnName(item ReturnItem) string {
 		}
 		return fmt.Sprintf("%s(%s)", item.Aggregation, item.Variable)
 	}
+	if item.FunctionName != "" {
+		if item.Property != "" {
+			return fmt.Sprintf("%s(%s.%s)", item.FunctionName, item.Variable, item.Property)
+		}
+		return fmt.Sprintf("%s(%s)", item.FunctionName, item.Variable)
+	}
 	if item.Property != "" {
 		return item.Variable + "." + item.Property
 	}
@@ -80,6 +87,18 @@ func buildRowFromMatch(match Match, items []ReturnItem) map[string]interface{} {
 	row := map[string]interface{}{}
 	for _, item := range items {
 		colName := getColumnName(item)
+
+		// Scalar function evaluation (DURATION, etc.)
+		if item.FunctionName != "" {
+			entity, ok := match[item.Variable]
+			if !ok {
+				row[colName] = nil
+				continue
+			}
+			row[colName] = applyScalarFunction(item.FunctionName, entity)
+			continue
+		}
+
 		entity, ok := match[item.Variable]
 		if !ok {
 			row[colName] = nil
@@ -96,6 +115,31 @@ func buildRowFromMatch(match Match, items []ReturnItem) map[string]interface{} {
 		}
 	}
 	return row
+}
+
+// applyScalarFunction evaluates a scalar function against an entity or value.
+func applyScalarFunction(fn string, entity interface{}) interface{} {
+	switch fn {
+	case "duration":
+		var validFrom time.Time
+		var validTo *time.Time
+		switch e := entity.(type) {
+		case *Node:
+			validFrom = e.ValidFrom
+			validTo = e.ValidTo
+		case *Relationship:
+			validFrom = e.ValidFrom
+			validTo = e.ValidTo
+		default:
+			return nil
+		}
+		end := time.Now()
+		if validTo != nil {
+			end = *validTo
+		}
+		return end.Sub(validFrom).Hours() / 24 // days
+	}
+	return nil
 }
 
 // buildAggregatedRows handles aggregation functions (COUNT, SUM, AVG, MIN, MAX, COLLECT).

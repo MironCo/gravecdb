@@ -259,7 +259,83 @@ func (g *DiskGraph) executeReadQuery(query *Query, embedder Embedder) (*QueryRes
 
 	// Regular MATCH
 	matches := g.findMatchesUnlocked(query.MatchPattern, query.WhereClause)
+
+	// Apply semantic WHERE conditions: WHERE p SIMILAR TO "..."
+	if query.WhereClause != nil && len(query.WhereClause.SemanticConditions) > 0 {
+		var err error
+		matches, err = g.filterSemanticUnlocked(matches, query.WhereClause.SemanticConditions, embedder)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return buildResult(matches, query.ReturnClause), nil
+}
+
+// filterSemanticUnlocked filters matches by embedding similarity (caller holds read lock).
+func (g *DiskGraph) filterSemanticUnlocked(matches []Match, semConds []GraphSemanticCondition, embedder Embedder) ([]Match, error) {
+	if embedder == nil {
+		return nil, fmt.Errorf("embedder required for SIMILAR TO in WHERE clause")
+	}
+
+	// Load all current embeddings from disk once
+	allEmbs, err := g.boltStore.GetAllEmbeddings()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load embeddings: %w", err)
+	}
+	embStore := embedding.NewStore()
+	for nodeID, embs := range allEmbs {
+		for _, emb := range embs {
+			emb.NodeID = nodeID
+			embStore.LoadEmbedding(emb)
+		}
+	}
+
+	// Pre-compute one query vector per semantic condition
+	type semFilter struct {
+		variable  string
+		vector    []float32
+		threshold float32
+	}
+	var filters []semFilter
+	for _, cond := range semConds {
+		vec, err := embedder.Embed(cond.QueryText)
+		if err != nil {
+			return nil, fmt.Errorf("failed to embed query %q: %w", cond.QueryText, err)
+		}
+		filters = append(filters, semFilter{cond.Variable, vec, cond.Threshold})
+	}
+
+	var result []Match
+	for _, match := range matches {
+		allPass := true
+		for _, f := range filters {
+			entity, ok := match[f.variable]
+			if !ok {
+				allPass = false
+				break
+			}
+			node, ok := entity.(*Node)
+			if !ok {
+				allPass = false
+				break
+			}
+			emb := embStore.GetCurrent(node.ID)
+			if emb == nil {
+				allPass = false
+				break
+			}
+			sim := embedding.CosineSimilarity(f.vector, emb.Vector)
+			if f.threshold > 0 && sim < f.threshold {
+				allPass = false
+				break
+			}
+		}
+		if allPass {
+			result = append(result, match)
+		}
+	}
+	return result, nil
 }
 
 // ============================================================================

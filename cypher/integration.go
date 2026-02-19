@@ -96,7 +96,8 @@ type GraphDeleteClause struct {
 }
 
 type GraphWhereClause struct {
-	Conditions []GraphCondition
+	Conditions         []GraphCondition
+	SemanticConditions []GraphSemanticCondition
 }
 
 type GraphCondition struct {
@@ -104,6 +105,12 @@ type GraphCondition struct {
 	Property string
 	Operator string
 	Value    interface{}
+}
+
+type GraphSemanticCondition struct {
+	Variable  string
+	QueryText string
+	Threshold float32
 }
 
 type GraphReturnClause struct {
@@ -115,10 +122,11 @@ type GraphReturnClause struct {
 }
 
 type GraphReturnItem struct {
-	Variable    string
-	Property    string
-	Aggregation string // COUNT, SUM, AVG, MIN, MAX, COLLECT
-	Alias       string
+	Variable     string
+	Property     string
+	Aggregation  string // COUNT, SUM, AVG, MIN, MAX, COLLECT
+	FunctionName string // non-aggregation function: "duration", "toupper", etc.
+	Alias        string
 }
 
 type GraphOrderItem struct {
@@ -377,35 +385,37 @@ func convertCreateToGraph(c *CreateClause) (*GraphCreateClause, error) {
 }
 
 func convertWhereToGraph(w *WhereClause) (*GraphWhereClause, error) {
-	gw := &GraphWhereClause{
-		Conditions: []GraphCondition{},
-	}
+	gw := &GraphWhereClause{}
 
-	conditions, err := extractGraphConditions(w.Condition)
+	conditions, semanticConditions, err := extractGraphConditions(w.Condition)
 	if err != nil {
 		return nil, err
 	}
 	gw.Conditions = conditions
+	gw.SemanticConditions = semanticConditions
 
 	return gw, nil
 }
 
-func extractGraphConditions(expr Expression) ([]GraphCondition, error) {
+func extractGraphConditions(expr Expression) ([]GraphCondition, []GraphSemanticCondition, error) {
 	var conditions []GraphCondition
+	var semanticConditions []GraphSemanticCondition
 
 	switch e := expr.(type) {
 	case *BinaryExpression:
 		if e.Operator == "AND" || e.Operator == "and" {
-			left, err := extractGraphConditions(e.Left)
+			lc, ls, err := extractGraphConditions(e.Left)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			right, err := extractGraphConditions(e.Right)
+			rc, rs, err := extractGraphConditions(e.Right)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			conditions = append(conditions, left...)
-			conditions = append(conditions, right...)
+			conditions = append(conditions, lc...)
+			conditions = append(conditions, rc...)
+			semanticConditions = append(semanticConditions, ls...)
+			semanticConditions = append(semanticConditions, rs...)
 		}
 
 	case *ComparisonExpression:
@@ -418,9 +428,16 @@ func extractGraphConditions(expr Expression) ([]GraphCondition, error) {
 		}
 		cond.Value = extractExprValue(e.Right)
 		conditions = append(conditions, cond)
+
+	case *SimilarToExpression:
+		semanticConditions = append(semanticConditions, GraphSemanticCondition{
+			Variable:  e.Variable,
+			QueryText: e.Query,
+			Threshold: e.Threshold,
+		})
 	}
 
-	return conditions, nil
+	return conditions, semanticConditions, nil
 }
 
 func convertReturnToGraph(r *ReturnClause) *GraphReturnClause {
@@ -464,25 +481,46 @@ func convertReturnToGraph(r *ReturnClause) *GraphReturnClause {
 	for _, item := range r.Items {
 		gi := GraphReturnItem{}
 
-		// Check if it's a function call (aggregation)
+		// Check if it's a function call (aggregation or scalar)
 		if fc, ok := item.Expression.(*FunctionCall); ok {
-			gi.Aggregation = strings.ToUpper(fc.Name)
-			// Get the argument (e.g., COUNT(p) -> p)
-			if len(fc.Arguments) > 0 {
-				switch arg := fc.Arguments[0].(type) {
-				case *Identifier:
-					gi.Variable = arg.Name
-				case *PropertyAccess:
-					if ident, ok := arg.Object.(*Identifier); ok {
-						gi.Variable = ident.Name
+			upperName := strings.ToUpper(fc.Name)
+			isAggregation := map[string]bool{
+				"COUNT": true, "SUM": true, "AVG": true,
+				"MIN": true, "MAX": true, "COLLECT": true,
+			}[upperName]
+
+			if isAggregation {
+				gi.Aggregation = upperName
+				// Get the argument (e.g., COUNT(p) -> p)
+				if len(fc.Arguments) > 0 {
+					switch arg := fc.Arguments[0].(type) {
+					case *Identifier:
+						gi.Variable = arg.Name
+					case *PropertyAccess:
+						if ident, ok := arg.Object.(*Identifier); ok {
+							gi.Variable = ident.Name
+						}
+						gi.Property = arg.Property
+					case *Star:
+						gi.Variable = "*"
 					}
-					gi.Property = arg.Property
-				case *Star:
+				} else if upperName == "COUNT" {
 					gi.Variable = "*"
 				}
-			} else if gi.Aggregation == "COUNT" {
-				// COUNT() with no args is same as COUNT(*)
-				gi.Variable = "*"
+			} else {
+				// Non-aggregation scalar function: DURATION, toUpper, abs, etc.
+				gi.FunctionName = strings.ToLower(fc.Name)
+				if len(fc.Arguments) > 0 {
+					switch arg := fc.Arguments[0].(type) {
+					case *Identifier:
+						gi.Variable = arg.Name
+					case *PropertyAccess:
+						if ident, ok := arg.Object.(*Identifier); ok {
+							gi.Variable = ident.Name
+						}
+						gi.Property = arg.Property
+					}
+				}
 			}
 		} else {
 			switch e := item.Expression.(type) {
