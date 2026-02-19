@@ -15,6 +15,10 @@ func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*
 	// For read queries (MATCH without mutations), use in-memory graph
 
 	switch query.QueryType {
+	case "UNWIND":
+		return g.executeUnwindQuery(query)
+	case "MERGE":
+		return g.executeMergeQuery(query)
 	case "CREATE":
 		return g.executeCreateQuery(query)
 	case "MATCH":
@@ -37,6 +41,79 @@ func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*
 	default:
 		return nil, fmt.Errorf("unsupported query type: %s", query.QueryType)
 	}
+}
+
+// executeUnwindQuery expands a list literal into rows and applies RETURN.
+func (g *DiskGraph) executeUnwindQuery(query *Query) (*QueryResult, error) {
+	uc := query.UnwindClause
+	var matches []Match
+	for _, item := range uc.List {
+		matches = append(matches, Match{uc.Variable: item})
+	}
+	return buildResult(matches, query.ReturnClause), nil
+}
+
+// executeMergeQuery finds a node matching the pattern; creates it if absent.
+func (g *DiskGraph) executeMergeQuery(query *Query) (*QueryResult, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	mc := query.MergeClause
+	result := &QueryResult{Columns: []string{}, Rows: []map[string]interface{}{}}
+
+	for _, mn := range mc.Nodes {
+		// Try to find an existing node with matching labels + properties
+		var found *Node
+		if len(mn.Labels) > 0 {
+			for _, id := range g.labelIndex[mn.Labels[0]] {
+				n := g.getNodeUnlocked(id)
+				if n == nil || n.ValidTo != nil {
+					continue
+				}
+				match := true
+				for k, v := range mn.Properties {
+					if !valuesEqual(n.Properties[k], v) {
+						match = false
+						break
+					}
+				}
+				if match {
+					found = n
+					break
+				}
+			}
+		}
+
+		if found == nil {
+			found = g.createNodeUnlocked(mn.Labels...)
+			for k, v := range mn.Properties {
+				if err := g.setNodePropertyUnlocked(found.ID, k, v); err != nil {
+					return nil, err
+				}
+			}
+			// Re-fetch: setNodePropertyUnlocked creates a new version, so found is now stale
+			if refreshed := g.getNodeUnlocked(found.ID); refreshed != nil {
+				found = refreshed
+			}
+		}
+
+		if mn.Variable != "" && query.ReturnClause != nil {
+			result.Rows = append(result.Rows, map[string]interface{}{mn.Variable: found})
+		}
+	}
+
+	if query.ReturnClause != nil {
+		result.Columns = make([]string, len(query.ReturnClause.Items))
+		for i, item := range query.ReturnClause.Items {
+			if item.Alias != "" {
+				result.Columns[i] = item.Alias
+			} else {
+				result.Columns[i] = item.Variable
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // executeCreateQuery handles CREATE queries directly on DiskGraph
@@ -474,11 +551,10 @@ func (g *DiskGraph) executeEarliestPathUnlocked(query *Query) (*QueryResult, err
 		}
 	}
 
-	// Build adjacency list with all-time relationships
+	// Build adjacency list: forward direction only (From → To), respecting -[*]->
 	relsByNode := make(map[string][]*Relationship, len(allNodes))
 	for _, rel := range allRelsList {
 		relsByNode[rel.FromNodeID] = append(relsByNode[rel.FromNodeID], rel)
-		relsByNode[rel.ToNodeID] = append(relsByNode[rel.ToNodeID], rel)
 	}
 
 	// Start/end candidates are currently-alive nodes matching the patterns
@@ -550,9 +626,6 @@ func earliestPathDijkstra(
 			}
 
 			neighborID := rel.ToNodeID
-			if neighborID == nodeID {
-				neighborID = rel.FromNodeID
-			}
 
 			// Neighbor must have existed by the time we arrive
 			neighbor, ok := allNodes[neighborID]

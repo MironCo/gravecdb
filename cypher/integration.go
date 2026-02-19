@@ -29,6 +29,8 @@ type GraphQuery struct {
 	TimeClause      *GraphTimeClause
 	EmbedClause     *GraphEmbedClause
 	SimilarToClause *GraphSimilarToClause
+	UnwindClause    *GraphUnwindClause
+	MergeClause     *GraphCreateClause // reuses create structure; execution differs
 	IsPathQuery     bool
 }
 
@@ -147,6 +149,11 @@ type GraphEmbedClause struct {
 	Property string
 }
 
+type GraphUnwindClause struct {
+	List     []interface{}
+	Variable string
+}
+
 type GraphSimilarToClause struct {
 	Variable    string
 	QueryText   string
@@ -222,6 +229,20 @@ func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
 		case *SimilarToClause:
 			stc := convertSimilarToGraph(c)
 			gq.SimilarToClause = stc
+
+		case *UnwindClause:
+			gq.QueryType = "UNWIND"
+			gq.UnwindClause = convertUnwindToGraph(c)
+
+		case *MergeClause:
+			if gq.QueryType == "" {
+				gq.QueryType = "MERGE"
+			}
+			mc, err := convertCreateToGraph(&CreateClause{Pattern: c.Pattern})
+			if err != nil {
+				return nil, err
+			}
+			gq.MergeClause = mc
 		}
 	}
 
@@ -606,6 +627,16 @@ func convertEmbedToGraph(e *EmbedClause) *GraphEmbedClause {
 		Text:     e.Text,
 		Property: e.Property,
 	}
+}
+
+func convertUnwindToGraph(u *UnwindClause) *GraphUnwindClause {
+	var list []interface{}
+	if lit, ok := u.Expression.(*ListLiteral); ok {
+		for _, elem := range lit.Elements {
+			list = append(list, extractExprValue(elem))
+		}
+	}
+	return &GraphUnwindClause{List: list, Variable: u.Variable}
 }
 
 func convertSimilarToGraph(s *SimilarToClause) *GraphSimilarToClause {

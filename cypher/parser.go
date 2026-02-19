@@ -522,6 +522,10 @@ func (p *Parser) parsePatternPart() *PatternPart {
 	if p.curTokenIs(TOKEN_SHORTESTPATH) || p.curTokenIs(TOKEN_ALLSHORTESTPATHS) || p.curTokenIs(TOKEN_EARLIESTPATH) {
 		sp := p.parseShortestPath()
 		if sp != nil {
+			// Propagate the outer path variable (e.g. "p" in MATCH p = shortestPath(...))
+			if sp.Variable == "" {
+				sp.Variable = part.Variable
+			}
 			part.Elements = append(part.Elements, sp)
 		}
 		return part
