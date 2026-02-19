@@ -77,6 +77,67 @@ func loadDemoData() {
 		}
 		time.Sleep(50 * time.Millisecond)
 
+		_, err = conn.Query(`CREATE (isabel:Person {name: "Isabel", role: "security engineer"})`)
+		if err != nil {
+			log.Printf("Failed to create Isabel: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`CREATE (jack:Person {name: "Jack", role: "platform engineer"})`)
+		if err != nil {
+			log.Printf("Failed to create Jack: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`CREATE (kate:Person {name: "Kate", role: "engineering manager"})`)
+		if err != nil {
+			log.Printf("Failed to create Kate: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`CREATE (liam:Person {name: "Liam", role: "backend engineer"})`)
+		if err != nil {
+			log.Printf("Failed to create Liam: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`CREATE (maya:Person {name: "Maya", role: "ML engineer"})`)
+		if err != nil {
+			log.Printf("Failed to create Maya: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		// Create skills
+		_, err = conn.Query(`CREATE (s1:Skill {name: "Go", category: "backend"})`)
+		if err != nil {
+			log.Printf("Failed to create Go skill: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`CREATE (s2:Skill {name: "Python", category: "data"})`)
+		if err != nil {
+			log.Printf("Failed to create Python skill: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`CREATE (s3:Skill {name: "Kubernetes", category: "infrastructure"})`)
+		if err != nil {
+			log.Printf("Failed to create Kubernetes skill: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`CREATE (s4:Skill {name: "React", category: "frontend"})`)
+		if err != nil {
+			log.Printf("Failed to create React skill: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`CREATE (s5:Skill {name: "Machine Learning", category: "data"})`)
+		if err != nil {
+			log.Printf("Failed to create ML skill: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
 		// Create companies
 		_, err = conn.Query(`CREATE (tc:Company {name: "TechCorp"})`)
 		if err != nil {
@@ -158,6 +219,110 @@ func loadDemoData() {
 		}
 		time.Sleep(50 * time.Millisecond)
 
+		_, err = conn.Query(`MATCH (isabel:Person {name: "Isabel"}), (tc:Company {name: "TechCorp"}) CREATE (isabel)-[:WORKS_AT {title: "Security Engineer"}]->(tc)`)
+		if err != nil {
+			log.Printf("Failed to create Isabel's job: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`MATCH (jack:Person {name: "Jack"}), (bc:Company {name: "BigCo"}) CREATE (jack)-[:WORKS_AT {title: "Senior Platform Engineer"}]->(bc)`)
+		if err != nil {
+			log.Printf("Failed to create Jack's job: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`MATCH (kate:Person {name: "Kate"}), (s:Company {name: "CoolStartup"}) CREATE (kate)-[:WORKS_AT {title: "Engineering Manager"}]->(s)`)
+		if err != nil {
+			log.Printf("Failed to create Kate's job: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`MATCH (liam:Person {name: "Liam"}), (bc:Company {name: "BigCo"}) CREATE (liam)-[:WORKS_AT {title: "Backend Engineer"}]->(bc)`)
+		if err != nil {
+			log.Printf("Failed to create Liam's job: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`MATCH (maya:Person {name: "Maya"}), (s:Company {name: "CoolStartup"}) CREATE (maya)-[:WORKS_AT {title: "ML Engineer"}]->(s)`)
+		if err != nil {
+			log.Printf("Failed to create Maya's job: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		// Skill assignments
+		_, err = conn.Query(`MATCH (alice:Person {name: "Alice"}), (sk:Skill {name: "Go"}) CREATE (alice)-[:HAS_SKILL {level: "expert"}]->(sk)`)
+		if err != nil {
+			log.Printf("Failed to assign Go to Alice: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`MATCH (liam:Person {name: "Liam"}), (sk:Skill {name: "Go"}) CREATE (liam)-[:HAS_SKILL {level: "intermediate"}]->(sk)`)
+		if err != nil {
+			log.Printf("Failed to assign Go to Liam: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`MATCH (jack:Person {name: "Jack"}), (sk:Skill {name: "Kubernetes"}) CREATE (jack)-[:HAS_SKILL {level: "expert"}]->(sk)`)
+		if err != nil {
+			log.Printf("Failed to assign Kubernetes to Jack: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`MATCH (david:Person {name: "David"}), (sk:Skill {name: "Kubernetes"}) CREATE (david)-[:HAS_SKILL {level: "expert"}]->(sk)`)
+		if err != nil {
+			log.Printf("Failed to assign Kubernetes to David: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`MATCH (frank:Person {name: "Frank"}), (sk:Skill {name: "Python"}) CREATE (frank)-[:HAS_SKILL {level: "expert"}]->(sk)`)
+		if err != nil {
+			log.Printf("Failed to assign Python to Frank: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`MATCH (maya:Person {name: "Maya"}), (sk:Skill {name: "Python"}) CREATE (maya)-[:HAS_SKILL {level: "expert"}]->(sk)`)
+		if err != nil {
+			log.Printf("Failed to assign Python to Maya: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`MATCH (maya:Person {name: "Maya"}), (sk:Skill {name: "Machine Learning"}) CREATE (maya)-[:HAS_SKILL {level: "expert"}]->(sk)`)
+		if err != nil {
+			log.Printf("Failed to assign ML to Maya: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`MATCH (bob:Person {name: "Bob"}), (sk:Skill {name: "React"}) CREATE (bob)-[:HAS_SKILL {level: "expert"}]->(sk)`)
+		if err != nil {
+			log.Printf("Failed to assign React to Bob: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		// Reporting structure
+		_, err = conn.Query(`MATCH (alice:Person {name: "Alice"}), (carol:Person {name: "Carol"}) CREATE (alice)-[:REPORTS_TO]->(carol)`)
+		if err != nil {
+			log.Printf("Failed to create Alice->Carol reporting: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`MATCH (henry:Person {name: "Henry"}), (carol:Person {name: "Carol"}) CREATE (henry)-[:REPORTS_TO]->(carol)`)
+		if err != nil {
+			log.Printf("Failed to create Henry->Carol reporting: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`MATCH (liam:Person {name: "Liam"}), (jack:Person {name: "Jack"}) CREATE (liam)-[:REPORTS_TO]->(jack)`)
+		if err != nil {
+			log.Printf("Failed to create Liam->Jack reporting: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`MATCH (maya:Person {name: "Maya"}), (kate:Person {name: "Kate"}) CREATE (maya)-[:REPORTS_TO]->(kate)`)
+		if err != nil {
+			log.Printf("Failed to create Maya->Kate reporting: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
 		// Friendships
 		_, err = conn.Query(`MATCH (alice:Person {name: "Alice"}), (bob:Person {name: "Bob"}) CREATE (alice)-[:FRIENDS_WITH {since: 2020}]->(bob)`)
 		if err != nil {
@@ -174,6 +339,24 @@ func loadDemoData() {
 		_, err = conn.Query(`MATCH (carol:Person {name: "Carol"}), (eve:Person {name: "Eve"}) CREATE (carol)-[:FRIENDS_WITH {since: 2021}]->(eve)`)
 		if err != nil {
 			log.Printf("Failed to create Carol-Eve friendship: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`MATCH (frank:Person {name: "Frank"}), (maya:Person {name: "Maya"}) CREATE (frank)-[:FRIENDS_WITH {since: 2022}]->(maya)`)
+		if err != nil {
+			log.Printf("Failed to create Frank-Maya friendship: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`MATCH (jack:Person {name: "Jack"}), (david:Person {name: "David"}) CREATE (jack)-[:FRIENDS_WITH {since: 2020}]->(david)`)
+		if err != nil {
+			log.Printf("Failed to create Jack-David friendship: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = conn.Query(`MATCH (isabel:Person {name: "Isabel"}), (henry:Person {name: "Henry"}) CREATE (isabel)-[:FRIENDS_WITH {since: 2023}]->(henry)`)
+		if err != nil {
+			log.Printf("Failed to create Isabel-Henry friendship: %v", err)
 		}
 		time.Sleep(50 * time.Millisecond)
 

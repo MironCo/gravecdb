@@ -400,12 +400,13 @@ func (g *DiskGraph) executeSimilarToUnlocked(query *Query, embedder Embedder) (*
 		}
 	}
 
-	// Load all embeddings from disk into a temporary store
+	// Load all embeddings from disk into a temporary store, preserving original timestamps
 	embStore := embedding.NewStore()
 	allEmbs, _ := g.boltStore.GetAllEmbeddings()
 	for nodeID, embs := range allEmbs {
 		for _, emb := range embs {
-			embStore.Add(nodeID, emb.Vector, emb.Model, emb.PropertySnapshot)
+			emb.NodeID = nodeID
+			embStore.LoadEmbedding(emb)
 		}
 	}
 
@@ -1147,48 +1148,79 @@ func (g *DiskGraph) executeEmbedQuery(query *Query, embedder Embedder) (*QueryRe
 			continue // Can only embed nodes
 		}
 
-		// Generate text based on mode
-		var text string
-		switch ec.Mode {
-		case "AUTO":
-			text = g.generateAutoEmbedText(node)
-		case "TEXT":
-			text = ec.Text
-		case "PROPERTY":
-			if propVal, exists := node.Properties[ec.Property]; exists {
-				text = fmt.Sprint(propVal)
-			} else {
-				continue // Skip nodes without the property
-			}
+		// Load all historical versions of this node so we can embed each one
+		allVersions, _ := g.boltStore.GetNodeVersions(node.ID)
+		if len(allVersions) == 0 {
+			allVersions = []*Node{node} // fallback to current
 		}
 
-		if text == "" {
+		// Deduplicate consecutive versions that produce the same embedded text.
+		// When the embedded value hasn't changed (e.g. only an unrelated property
+		// was updated), we extend the previous embedding's time range instead of
+		// creating a duplicate entry.
+		type pendingEmb struct {
+			text      string
+			snapshot  map[string]interface{}
+			validFrom time.Time
+			validTo   *time.Time
+		}
+		var deduped []pendingEmb
+		for _, version := range allVersions {
+			var text string
+			switch ec.Mode {
+			case "AUTO":
+				text = g.generateAutoEmbedText(version)
+			case "TEXT":
+				text = ec.Text
+			case "PROPERTY":
+				if propVal, exists := version.Properties[ec.Property]; exists {
+					text = fmt.Sprint(propVal)
+				}
+			}
+			if text == "" {
+				continue
+			}
+			if len(deduped) > 0 && deduped[len(deduped)-1].text == text {
+				// Same value — extend the time range and update snapshot to latest props
+				last := &deduped[len(deduped)-1]
+				last.validTo = version.ValidTo
+				for k, v := range version.Properties {
+					last.snapshot[k] = v
+				}
+				continue
+			}
+			snapshot := make(map[string]interface{})
+			for k, v := range version.Properties {
+				snapshot[k] = v
+			}
+			deduped = append(deduped, pendingEmb{
+				text:      text,
+				snapshot:  snapshot,
+				validFrom: version.ValidFrom,
+				validTo:   version.ValidTo,
+			})
+		}
+
+		var newEmbs []*Embedding
+		for _, pe := range deduped {
+			vector, err := embedder.Embed(pe.text)
+			if err != nil {
+				return nil, fmt.Errorf("failed to embed node %s: %w", node.ID, err)
+			}
+			newEmbs = append(newEmbs, &Embedding{
+				Vector:           vector,
+				Model:            "embedder",
+				PropertySnapshot: pe.snapshot,
+				ValidFrom:        pe.validFrom,
+				ValidTo:          pe.validTo,
+			})
+		}
+
+		if len(newEmbs) == 0 {
 			continue
 		}
 
-		// Generate embedding
-		vector, err := embedder.Embed(text)
-		if err != nil {
-			return nil, fmt.Errorf("failed to embed node %s: %w", node.ID, err)
-		}
-
-		// Create property snapshot
-		propertySnapshot := make(map[string]interface{})
-		for k, v := range node.Properties {
-			propertySnapshot[k] = v
-		}
-
-		// Get existing embeddings and append new one
-		existingEmbs, _ := g.boltStore.GetEmbedding(node.ID)
-
-		newEmb := &Embedding{
-			Vector:           vector,
-			Model:            "embedder",
-			PropertySnapshot: propertySnapshot,
-		}
-
-		// Store embedding to disk
-		if err := g.boltStore.SaveEmbedding(node.ID, append(existingEmbs, newEmb)); err != nil {
+		if err := g.boltStore.SaveEmbedding(node.ID, newEmbs); err != nil {
 			return nil, fmt.Errorf("failed to save embedding: %w", err)
 		}
 		embeddedCount++

@@ -73,7 +73,12 @@ func (g *DiskGraph) rebuildLabelIndex() error {
 		return err
 	}
 
+	seen := make(map[string]bool)
 	for _, node := range nodes {
+		if node.ValidTo != nil || seen[node.ID] {
+			continue // only index currently valid nodes, deduplicate
+		}
+		seen[node.ID] = true
 		for _, label := range node.Labels {
 			g.labelIndex[label] = append(g.labelIndex[label], node.ID)
 		}
