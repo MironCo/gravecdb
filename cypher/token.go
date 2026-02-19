@@ -122,6 +122,7 @@ const (
 	// Path functions
 	TOKEN_SHORTESTPATH
 	TOKEN_ALLSHORTESTPATHS
+	TOKEN_EARLIESTPATH
 
 	// Custom extensions
 	TOKEN_AT
@@ -218,6 +219,7 @@ var keywords = map[string]TokenType{
 	"NULL":             TOKEN_NULL,
 	"SHORTESTPATH":     TOKEN_SHORTESTPATH,
 	"ALLSHORTESTPATHS": TOKEN_ALLSHORTESTPATHS,
+	"EARLIESTPATH":     TOKEN_EARLIESTPATH,
 
 	// Custom extensions
 	"AT":        TOKEN_AT,

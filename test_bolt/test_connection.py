@@ -120,6 +120,25 @@ def main():
                 print(f"  {record['p.name']}: sim={record['similarity']:.4f} from={record['valid_from']}")
             print(f"  PASS ({len(rows)} rows)")
 
+        # Test 11: earliestPath - earliest arrival path between two people
+        print("\n[Test 11] earliestPath((a:Person)-[*]->(b:Person)) - temporal Dijkstra")
+        print("-" * 40)
+        result = session.run(
+            "MATCH p = earliestPath((a:Person)-[*]->(b:Person)) RETURN p, arrival_time"
+        )
+        rows = list(result)
+        if len(rows) == 0:
+            print("  SKIP (no connected Person nodes)")
+        else:
+            for record in rows:
+                path = record["p"]
+                arrival = record["arrival_time"]
+                assert arrival is not None, "arrival_time should not be None"
+                start = path.start_node
+                end = path.end_node
+                print(f"  {dict(start).get('name','?')} -> {dict(end).get('name','?')}: earliest arrival {arrival} ({path.graph.relationship_count} hops)")
+            print(f"  PASS ({len(rows)} rows)")
+
     driver.close()
     print("\n" + "=" * 50)
     print("All tests completed!")

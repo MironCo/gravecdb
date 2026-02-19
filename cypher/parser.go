@@ -518,8 +518,8 @@ func (p *Parser) parsePatternPart() *PatternPart {
 		p.nextToken() // consume =
 	}
 
-	// Check for shortestPath or allShortestPaths
-	if p.curTokenIs(TOKEN_SHORTESTPATH) || p.curTokenIs(TOKEN_ALLSHORTESTPATHS) {
+	// Check for shortestPath, allShortestPaths, or earliestPath
+	if p.curTokenIs(TOKEN_SHORTESTPATH) || p.curTokenIs(TOKEN_ALLSHORTESTPATHS) || p.curTokenIs(TOKEN_EARLIESTPATH) {
 		sp := p.parseShortestPath()
 		if sp != nil {
 			part.Elements = append(part.Elements, sp)
