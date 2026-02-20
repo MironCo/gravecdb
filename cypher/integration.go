@@ -117,6 +117,7 @@ type GraphDeleteClause struct {
 type GraphWhereClause struct {
 	Conditions         []GraphCondition
 	SemanticConditions []GraphSemanticCondition
+	BoolExpr           Expression // full parsed tree; used when Conditions can't represent it (OR, NOT, etc.)
 }
 
 type GraphCondition struct {
@@ -441,6 +442,7 @@ func convertWhereToGraph(w *WhereClause) (*GraphWhereClause, error) {
 	}
 	gw.Conditions = conditions
 	gw.SemanticConditions = semanticConditions
+	gw.BoolExpr = w.Condition // full tree for OR / NOT / function evaluation
 
 	return gw, nil
 }
@@ -596,7 +598,8 @@ func convertReturnToGraph(r *ReturnClause) *GraphReturnClause {
 				gi.Property = e.Property
 			case *Star:
 				gi.Variable = "*"
-			case *CaseExpression:
+			case *CaseExpression, *IsNullExpression, *InExpression,
+				*BinaryExpression, *UnaryExpression, *FunctionCall:
 				gi.Expr = e
 			}
 		}

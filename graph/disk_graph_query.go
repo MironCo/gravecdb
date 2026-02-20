@@ -52,6 +52,9 @@ func (g *DiskGraph) executeUnwindQuery(query *Query) (*QueryResult, error) {
 	for _, item := range uc.List {
 		matches = append(matches, Match{uc.Variable: item})
 	}
+	if query.WhereClause != nil {
+		matches = g.filterMatchesUnlocked(matches, query.WhereClause)
+	}
 	return buildResult(matches, query.ReturnClause), nil
 }
 
@@ -1303,6 +1306,16 @@ func findMatchesInSnapshot(snap *temporalSnapshot, pattern *MatchPattern, where 
 
 // filterMatchesInSnapshot applies WHERE conditions to snapshot matches.
 func filterMatchesInSnapshot(matches []Match, where *WhereClause) []Match {
+	if where.BoolExpr != nil {
+		var result []Match
+		for _, match := range matches {
+			if evalBoolExpr(where.BoolExpr, match) {
+				result = append(result, match)
+			}
+		}
+		return result
+	}
+
 	var result []Match
 	for _, match := range matches {
 		allMatch := true
@@ -1810,7 +1823,22 @@ func (g *DiskGraph) findMatchesUnlocked(pattern *MatchPattern, where *WhereClaus
 
 // filterMatchesUnlocked applies WHERE conditions (caller must hold lock)
 func (g *DiskGraph) filterMatchesUnlocked(matches []map[string]interface{}, where *WhereClause) []map[string]interface{} {
-	if where == nil || len(where.Conditions) == 0 {
+	if where == nil {
+		return matches
+	}
+
+	// Full expression tree is available: handles OR, NOT, functions, etc.
+	if where.BoolExpr != nil {
+		var result []map[string]interface{}
+		for _, match := range matches {
+			if evalBoolExpr(where.BoolExpr, match) {
+				result = append(result, match)
+			}
+		}
+		return result
+	}
+
+	if len(where.Conditions) == 0 {
 		return matches
 	}
 

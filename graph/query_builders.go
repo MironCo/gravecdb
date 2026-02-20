@@ -728,6 +728,12 @@ func evalExpr(expr cypher.Expression, match Match) interface{} {
 		return e.Value
 	case *cypher.NullLiteral:
 		return nil
+	case *cypher.ListLiteral:
+		result := make([]interface{}, len(e.Elements))
+		for i, elem := range e.Elements {
+			result[i] = evalExpr(elem, match)
+		}
+		return result
 	case *cypher.UnaryExpression:
 		val := evalExpr(e.Operand, match)
 		if e.Operator == "-" {
@@ -753,6 +759,29 @@ func evalExpr(expr cypher.Expression, match Match) interface{} {
 		return applyScalarFunction(strings.ToLower(e.Name), arg)
 	case *cypher.CaseExpression:
 		return evalCaseExpr(e, match)
+	case *cypher.IsNullExpression:
+		val := evalExpr(e.Expression, match)
+		isNull := val == nil
+		if e.Not {
+			return !isNull
+		}
+		return isNull
+	case *cypher.InExpression:
+		val := evalExpr(e.Expression, match)
+		listVal := evalExpr(e.List, match)
+		var found bool
+		if list, ok := listVal.([]interface{}); ok {
+			for _, item := range list {
+				if fmt.Sprintf("%v", val) == fmt.Sprintf("%v", item) {
+					found = true
+					break
+				}
+			}
+		}
+		if e.Not {
+			return !found
+		}
+		return found
 	}
 	return nil
 }
@@ -853,6 +882,29 @@ func evalBoolExpr(expr cypher.Expression, match Match) bool {
 		if strings.ToUpper(e.Operator) == "NOT" {
 			return !evalBoolExpr(e.Operand, match)
 		}
+	case *cypher.IsNullExpression:
+		val := evalExpr(e.Expression, match)
+		isNull := val == nil
+		if e.Not {
+			return !isNull
+		}
+		return isNull
+	case *cypher.InExpression:
+		val := evalExpr(e.Expression, match)
+		listVal := evalExpr(e.List, match)
+		var found bool
+		if list, ok := listVal.([]interface{}); ok {
+			for _, item := range list {
+				if fmt.Sprintf("%v", val) == fmt.Sprintf("%v", item) {
+					found = true
+					break
+				}
+			}
+		}
+		if e.Not {
+			return !found
+		}
+		return found
 	}
 	return evalExpr(expr, match) != nil
 }

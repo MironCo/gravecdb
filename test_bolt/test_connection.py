@@ -302,6 +302,64 @@ def main():
             print(f"  x={r['x']}  bucket={r['bucket']!r}")
         print("  PASS")
 
+        # Test 22: OR in WHERE
+        print("\n[Test 22] OR in WHERE")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND [1, 2, 3, 4, 5] AS x WHERE x = 1 OR x = 3 OR x = 5 RETURN x"
+        )
+        rows = list(result)
+        vals = sorted([r["x"] for r in rows])
+        assert vals == [1, 3, 5], f"Expected [1,3,5], got {vals}"
+        print(f"  Filtered values: {vals}")
+        print("  PASS")
+
+        # Test 23: NOT in WHERE
+        print("\n[Test 23] NOT in WHERE")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND [1, 2, 3, 4, 5] AS x WHERE NOT x = 3 RETURN x"
+        )
+        rows = list(result)
+        vals = sorted([r["x"] for r in rows])
+        assert vals == [1, 2, 4, 5], f"Expected [1,2,4,5], got {vals}"
+        print(f"  Filtered values: {vals}")
+        print("  PASS")
+
+        # Test 24: IN operator in WHERE
+        print("\n[Test 24] IN operator in WHERE")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND [10, 20, 30, 40, 50] AS x WHERE x IN [20, 40] RETURN x"
+        )
+        rows = list(result)
+        vals = sorted([r["x"] for r in rows])
+        assert vals == [20, 40], f"Expected [20,40], got {vals}"
+        print(f"  IN filtered values: {vals}")
+        print("  PASS")
+
+        # Test 25: IS NULL / IS NOT NULL in WHERE (via OPTIONAL MATCH)
+        print("\n[Test 25] IS NULL / IS NOT NULL")
+        print("-" * 40)
+        # Create two nodes, one with 'score' and one without
+        session.run("MERGE (a:ScoreTest {id: 'a', score: 42})").consume()
+        session.run("MERGE (b:ScoreTest {id: 'b'})").consume()
+        result = session.run(
+            "MATCH (n:ScoreTest) WHERE n.score IS NULL RETURN n.id AS id"
+        )
+        null_ids = [r["id"] for r in result]
+        assert "b" in null_ids, f"Expected 'b' (no score) in IS NULL result, got {null_ids}"
+        assert "a" not in null_ids, f"'a' (has score) should not appear in IS NULL result"
+        result2 = session.run(
+            "MATCH (n:ScoreTest) WHERE n.score IS NOT NULL RETURN n.id AS id"
+        )
+        not_null_ids = [r["id"] for r in result2]
+        assert "a" in not_null_ids, f"Expected 'a' in IS NOT NULL result, got {not_null_ids}"
+        assert "b" not in not_null_ids, f"'b' should not appear in IS NOT NULL result"
+        print(f"  IS NULL ids: {null_ids}")
+        print(f"  IS NOT NULL ids: {not_null_ids}")
+        print("  PASS")
+
     driver.close()
     print("\n" + "=" * 50)
     print("All tests completed!")
