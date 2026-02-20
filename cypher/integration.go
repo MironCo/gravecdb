@@ -33,6 +33,7 @@ type GraphQuery struct {
 	MergeClause     *GraphCreateClause // reuses create structure; execution differs
 	Pipeline        *GraphPipeline     // set when WITH clause is present
 	IsPathQuery     bool
+	Optional        bool               // true when OPTIONAL MATCH (no-match → one empty row)
 }
 
 // GraphPipelineStage is one MATCH+WHERE step in a WITH-chained query.
@@ -119,10 +120,11 @@ type GraphWhereClause struct {
 }
 
 type GraphCondition struct {
-	Variable string
-	Property string
-	Operator string
-	Value    interface{}
+	Variable     string
+	Property     string
+	FunctionName string      // e.g. "toupper" — applied to the property value before comparing
+	Operator     string
+	Value        interface{}
 }
 
 type GraphSemanticCondition struct {
@@ -142,9 +144,10 @@ type GraphReturnClause struct {
 type GraphReturnItem struct {
 	Variable     string
 	Property     string
-	Aggregation  string // COUNT, SUM, AVG, MIN, MAX, COLLECT
-	FunctionName string // non-aggregation function: "duration", "toupper", etc.
+	Aggregation  string     // COUNT, SUM, AVG, MIN, MAX, COLLECT
+	FunctionName string     // non-aggregation function: "duration", "toupper", etc.
 	Alias        string
+	Expr         Expression // non-nil for CASE WHEN and other complex expressions
 }
 
 type GraphOrderItem struct {
@@ -194,6 +197,7 @@ func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
 		switch c := clause.(type) {
 		case *MatchClause:
 			gq.QueryType = "MATCH"
+			gq.Optional = c.Optional
 			pattern, err := convertPatternToGraph(c.Pattern)
 			if err != nil {
 				return nil, err
@@ -464,11 +468,26 @@ func extractGraphConditions(expr Expression) ([]GraphCondition, []GraphSemanticC
 
 	case *ComparisonExpression:
 		cond := GraphCondition{Operator: e.Operator}
-		if prop, ok := e.Left.(*PropertyAccess); ok {
-			if ident, ok := prop.Object.(*Identifier); ok {
+		switch left := e.Left.(type) {
+		case *PropertyAccess:
+			if ident, ok := left.Object.(*Identifier); ok {
 				cond.Variable = ident.Name
 			}
-			cond.Property = prop.Property
+			cond.Property = left.Property
+		case *FunctionCall:
+			// e.g. toUpper(p.name) = 'ALICE'
+			cond.FunctionName = strings.ToLower(left.Name)
+			if len(left.Arguments) > 0 {
+				switch arg := left.Arguments[0].(type) {
+				case *Identifier:
+					cond.Variable = arg.Name
+				case *PropertyAccess:
+					if ident, ok := arg.Object.(*Identifier); ok {
+						cond.Variable = ident.Name
+					}
+					cond.Property = arg.Property
+				}
+			}
 		}
 		cond.Value = extractExprValue(e.Right)
 		conditions = append(conditions, cond)
@@ -577,6 +596,8 @@ func convertReturnToGraph(r *ReturnClause) *GraphReturnClause {
 				gi.Property = e.Property
 			case *Star:
 				gi.Variable = "*"
+			case *CaseExpression:
+				gi.Expr = e
 			}
 		}
 

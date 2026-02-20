@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/MironCo/gravecdb/cypher"
 )
 
 // buildResult constructs the query result based on RETURN clause.
@@ -66,6 +68,9 @@ func getColumnName(item ReturnItem) string {
 	if item.Alias != "" {
 		return item.Alias
 	}
+	if item.Expr != nil {
+		return "case"
+	}
 	if item.Aggregation != "" {
 		if item.Property != "" {
 			return fmt.Sprintf("%s(%s.%s)", item.Aggregation, item.Variable, item.Property)
@@ -89,6 +94,12 @@ func buildRowFromMatch(match Match, items []ReturnItem) map[string]interface{} {
 	row := map[string]interface{}{}
 	for _, item := range items {
 		colName := getColumnName(item)
+
+		// Complex expression (CASE WHEN, etc.)
+		if item.Expr != nil {
+			row[colName] = evalExpr(item.Expr, match)
+			continue
+		}
 
 		// Scalar function evaluation (toUpper, abs, duration, etc.)
 		if item.FunctionName != "" {
@@ -688,4 +699,160 @@ func copyMatch(m Match) Match {
 		cp[k] = v
 	}
 	return cp
+}
+
+// ── Expression evaluator ──────────────────────────────────────────────────────
+
+// evalExpr evaluates a cypher AST expression against a row match, returning
+// its runtime value (string, int, float64, bool, nil, …).
+func evalExpr(expr cypher.Expression, match Match) interface{} {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.(type) {
+	case *cypher.Identifier:
+		return extractMatchValue(match, e.Name, "")
+	case *cypher.PropertyAccess:
+		varName := ""
+		if ident, ok := e.Object.(*cypher.Identifier); ok {
+			varName = ident.Name
+		}
+		return extractMatchValue(match, varName, e.Property)
+	case *cypher.IntegerLiteral:
+		return int(e.Value)
+	case *cypher.FloatLiteral:
+		return e.Value
+	case *cypher.StringLiteral:
+		return e.Value
+	case *cypher.BooleanLiteral:
+		return e.Value
+	case *cypher.NullLiteral:
+		return nil
+	case *cypher.UnaryExpression:
+		val := evalExpr(e.Operand, match)
+		if e.Operator == "-" {
+			switch v := val.(type) {
+			case int:
+				return -v
+			case int64:
+				return -v
+			case float64:
+				return -v
+			}
+		}
+		return val
+	case *cypher.BinaryExpression:
+		left := evalExpr(e.Left, match)
+		right := evalExpr(e.Right, match)
+		return evalBinaryOp(left, e.Operator, right)
+	case *cypher.FunctionCall:
+		var arg interface{}
+		if len(e.Arguments) > 0 {
+			arg = evalExpr(e.Arguments[0], match)
+		}
+		return applyScalarFunction(strings.ToLower(e.Name), arg)
+	case *cypher.CaseExpression:
+		return evalCaseExpr(e, match)
+	}
+	return nil
+}
+
+// extractMatchValue resolves a variable (and optional property) from a match.
+func extractMatchValue(match Match, variable, property string) interface{} {
+	entity, ok := match[variable]
+	if !ok {
+		return nil
+	}
+	if property == "" {
+		return entity
+	}
+	if node, ok := entity.(*Node); ok {
+		return node.Properties[property]
+	}
+	if rel, ok := entity.(*Relationship); ok {
+		return rel.Properties[property]
+	}
+	return nil
+}
+
+// evalBinaryOp performs arithmetic or string concatenation.
+func evalBinaryOp(left interface{}, op string, right interface{}) interface{} {
+	lf, lok := scalarToNumeric(left)
+	rf, rok := scalarToNumeric(right)
+	if lok && rok {
+		switch op {
+		case "+":
+			return lf + rf
+		case "-", "−":
+			return lf - rf
+		case "*":
+			return lf * rf
+		case "/":
+			if rf == 0 {
+				return nil
+			}
+			return lf / rf
+		case "%":
+			return math.Mod(lf, rf)
+		case "^":
+			return math.Pow(lf, rf)
+		}
+	}
+	if op == "+" {
+		ls, lok2 := scalarToString(left)
+		rs, rok2 := scalarToString(right)
+		if lok2 && rok2 {
+			return ls + rs
+		}
+	}
+	return nil
+}
+
+// evalCaseExpr evaluates a CASE WHEN … THEN … ELSE … END expression.
+func evalCaseExpr(e *cypher.CaseExpression, match Match) interface{} {
+	if e.Test != nil {
+		// Simple CASE: CASE x WHEN v1 THEN r1 … END
+		testVal := evalExpr(e.Test, match)
+		for _, when := range e.Whens {
+			whenVal := evalExpr(when.When, match)
+			if fmt.Sprintf("%v", testVal) == fmt.Sprintf("%v", whenVal) {
+				return evalExpr(when.Then, match)
+			}
+		}
+	} else {
+		// Searched CASE: CASE WHEN cond THEN r1 … END
+		for _, when := range e.Whens {
+			if evalBoolExpr(when.When, match) {
+				return evalExpr(when.Then, match)
+			}
+		}
+	}
+	if e.ElseResult != nil {
+		return evalExpr(e.ElseResult, match)
+	}
+	return nil
+}
+
+// evalBoolExpr evaluates a boolean cypher expression.
+func evalBoolExpr(expr cypher.Expression, match Match) bool {
+	switch e := expr.(type) {
+	case *cypher.BooleanLiteral:
+		return e.Value
+	case *cypher.ComparisonExpression:
+		left := evalExpr(e.Left, match)
+		right := evalExpr(e.Right, match)
+		return evaluateCondition(left, e.Operator, right)
+	case *cypher.BinaryExpression:
+		switch strings.ToUpper(e.Operator) {
+		case "AND":
+			return evalBoolExpr(e.Left, match) && evalBoolExpr(e.Right, match)
+		case "OR":
+			return evalBoolExpr(e.Left, match) || evalBoolExpr(e.Right, match)
+		}
+	case *cypher.UnaryExpression:
+		if strings.ToUpper(e.Operator) == "NOT" {
+			return !evalBoolExpr(e.Operand, match)
+		}
+	}
+	return evalExpr(expr, match) != nil
 }

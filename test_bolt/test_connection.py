@@ -261,6 +261,47 @@ def main():
                 print(f"  {r['person']} works at {r['company']}")
             print(f"  PASS ({len(rows)} rows)")
 
+        # Test 19: WHERE with scalar function — toUpper(p.name) = 'ALICE'
+        print("\n[Test 19] WHERE function: toUpper(p.name) = 'ALICE'")
+        print("-" * 40)
+        session.run("MERGE (p:TestPerson {name: 'alice_case'})").consume()
+        result = session.run("MATCH (p:TestPerson) WHERE toUpper(p.name) = 'ALICE_CASE' RETURN p.name AS name")
+        rows = list(result)
+        assert len(rows) >= 1, f"Expected at least 1 row, got {len(rows)}"
+        names = [r["name"] for r in rows]
+        assert "alice_case" in names, f"Expected 'alice_case' in results, got {names}"
+        print(f"  Found: {names}")
+        print("  PASS")
+
+        # Test 20: OPTIONAL MATCH — returns null row when pattern not found
+        print("\n[Test 20] OPTIONAL MATCH — null row on no match")
+        print("-" * 40)
+        result = session.run(
+            "OPTIONAL MATCH (p:NonExistentLabel9999) RETURN p.name AS name"
+        )
+        rows = list(result)
+        assert len(rows) == 1, f"Expected exactly 1 null row, got {len(rows)}"
+        assert rows[0]["name"] is None, f"Expected null name, got {rows[0]['name']}"
+        print(f"  Row: name={rows[0]['name']!r}")
+        print("  PASS")
+
+        # Test 21: CASE WHEN in RETURN
+        print("\n[Test 21] CASE WHEN in RETURN")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND [1, 5, 10] AS x "
+            "RETURN x, CASE WHEN x < 5 THEN 'low' WHEN x = 5 THEN 'mid' ELSE 'high' END AS bucket"
+        )
+        rows = list(result)
+        assert len(rows) == 3, f"Expected 3 rows, got {len(rows)}"
+        by_x = {r["x"]: r["bucket"] for r in rows}
+        assert by_x[1]  == "low",  f"x=1 bucket should be 'low',  got {by_x[1]!r}"
+        assert by_x[5]  == "mid",  f"x=5 bucket should be 'mid',  got {by_x[5]!r}"
+        assert by_x[10] == "high", f"x=10 bucket should be 'high', got {by_x[10]!r}"
+        for r in rows:
+            print(f"  x={r['x']}  bucket={r['bucket']!r}")
+        print("  PASS")
+
     driver.close()
     print("\n" + "=" * 50)
     print("All tests completed!")

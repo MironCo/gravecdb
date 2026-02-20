@@ -349,6 +349,12 @@ func (g *DiskGraph) executeReadQuery(query *Query, embedder Embedder) (*QueryRes
 		}
 	}
 
+	// OPTIONAL MATCH: if no rows were found, produce one empty row so that
+	// downstream RETURN items resolve to null rather than nothing.
+	if query.Optional && len(matches) == 0 {
+		matches = []Match{{}}
+	}
+
 	return buildResult(matches, query.ReturnClause), nil
 }
 
@@ -899,7 +905,11 @@ func filterNodesByWhere(nodes []*Node, variable string, where *WhereClause) []*N
 			if cond.Variable != variable {
 				continue
 			}
-			if !evaluateCondition(n.Properties[cond.Property], cond.Operator, cond.Value) {
+			propVal := n.Properties[cond.Property]
+			if cond.FunctionName != "" {
+				propVal = applyScalarFunction(cond.FunctionName, propVal)
+			}
+			if !evaluateCondition(propVal, cond.Operator, cond.Value) {
 				ok = false
 				break
 			}
@@ -1302,16 +1312,21 @@ func filterMatchesInSnapshot(matches []Match, where *WhereClause) []Match {
 				allMatch = false
 				break
 			}
-			var props map[string]interface{}
+			var propVal interface{}
 			if node, ok := entity.(*Node); ok {
-				props = node.Properties
+				propVal = node.Properties[cond.Property]
 			} else if rel, ok := entity.(*Relationship); ok {
-				props = rel.Properties
+				propVal = rel.Properties[cond.Property]
+			} else if cond.Property == "" {
+				propVal = entity
 			} else {
 				allMatch = false
 				break
 			}
-			if !evaluateCondition(props[cond.Property], cond.Operator, cond.Value) {
+			if cond.FunctionName != "" {
+				propVal = applyScalarFunction(cond.FunctionName, propVal)
+			}
+			if !evaluateCondition(propVal, cond.Operator, cond.Value) {
 				allMatch = false
 				break
 			}
@@ -1809,20 +1824,21 @@ func (g *DiskGraph) filterMatchesUnlocked(matches []map[string]interface{}, wher
 				break
 			}
 
-			var props map[string]interface{}
+			var propVal interface{}
 			if node, ok := entity.(*Node); ok {
-				props = node.Properties
+				propVal = node.Properties[cond.Property]
 			} else if rel, ok := entity.(*Relationship); ok {
-				props = rel.Properties
+				propVal = rel.Properties[cond.Property]
+			} else if cond.Property == "" {
+				// Scalar variable (e.g. from UNWIND)
+				propVal = entity
 			} else {
 				allMatch = false
 				break
 			}
 
-			propVal, exists := props[cond.Property]
-			if !exists {
-				allMatch = false
-				break
+			if cond.FunctionName != "" {
+				propVal = applyScalarFunction(cond.FunctionName, propVal)
 			}
 
 			if !evaluateCondition(propVal, cond.Operator, cond.Value) {
