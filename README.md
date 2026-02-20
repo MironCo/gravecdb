@@ -254,6 +254,12 @@ MATCH (p:Person) SIMILAR TO "data scientists" THRESHOLD 0.8 RETURN p.name
 
 -- Path finding
 MATCH path = shortestPath((a:Person)-[*]-(b:Person)) RETURN path
+
+-- Earliest arrival path (beta) — temporal Dijkstra
+-- "When could information have first reached Bob from Alice?"
+-- Traverses historical relationships; cost = max(arrival_time, rel.ValidFrom)
+MATCH path = earliestPath((a:Person {name: 'Alice'})-[*]->(b:Person {name: 'Bob'}))
+RETURN path, arrival_time
 ```
 
 ## Visualization Controls

@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"container/heap"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +15,12 @@ func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*
 	// For read queries (MATCH without mutations), use in-memory graph
 
 	switch query.QueryType {
+	case "PIPELINE":
+		return g.executePipelineQuery(query, embedder)
+	case "UNWIND":
+		return g.executeUnwindQuery(query)
+	case "MERGE":
+		return g.executeMergeQuery(query)
 	case "CREATE":
 		return g.executeCreateQuery(query)
 	case "MATCH":
@@ -36,6 +43,82 @@ func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*
 	default:
 		return nil, fmt.Errorf("unsupported query type: %s", query.QueryType)
 	}
+}
+
+// executeUnwindQuery expands a list literal into rows and applies RETURN.
+func (g *DiskGraph) executeUnwindQuery(query *Query) (*QueryResult, error) {
+	uc := query.UnwindClause
+	var matches []Match
+	for _, item := range uc.List {
+		matches = append(matches, Match{uc.Variable: item})
+	}
+	if query.WhereClause != nil {
+		matches = g.filterMatchesUnlocked(matches, query.WhereClause)
+	}
+	return buildResult(matches, query.ReturnClause), nil
+}
+
+// executeMergeQuery finds a node matching the pattern; creates it if absent.
+func (g *DiskGraph) executeMergeQuery(query *Query) (*QueryResult, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	mc := query.MergeClause
+	result := &QueryResult{Columns: []string{}, Rows: []map[string]interface{}{}}
+
+	for _, mn := range mc.Nodes {
+		// Try to find an existing node with matching labels + properties
+		var found *Node
+		if len(mn.Labels) > 0 {
+			for _, id := range g.labelIndex[mn.Labels[0]] {
+				n := g.getNodeUnlocked(id)
+				if n == nil || n.ValidTo != nil {
+					continue
+				}
+				match := true
+				for k, v := range mn.Properties {
+					if !valuesEqual(n.Properties[k], v) {
+						match = false
+						break
+					}
+				}
+				if match {
+					found = n
+					break
+				}
+			}
+		}
+
+		if found == nil {
+			found = g.createNodeUnlocked(mn.Labels...)
+			for k, v := range mn.Properties {
+				if err := g.setNodePropertyUnlocked(found.ID, k, v); err != nil {
+					return nil, err
+				}
+			}
+			// Re-fetch: setNodePropertyUnlocked creates a new version, so found is now stale
+			if refreshed := g.getNodeUnlocked(found.ID); refreshed != nil {
+				found = refreshed
+			}
+		}
+
+		if mn.Variable != "" && query.ReturnClause != nil {
+			result.Rows = append(result.Rows, map[string]interface{}{mn.Variable: found})
+		}
+	}
+
+	if query.ReturnClause != nil {
+		result.Columns = make([]string, len(query.ReturnClause.Items))
+		for i, item := range query.ReturnClause.Items {
+			if item.Alias != "" {
+				result.Columns[i] = item.Alias
+			} else {
+				result.Columns[i] = item.Variable
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // executeCreateQuery handles CREATE queries directly on DiskGraph
@@ -259,16 +342,136 @@ func (g *DiskGraph) executeReadQuery(query *Query, embedder Embedder) (*QueryRes
 
 	// Regular MATCH
 	matches := g.findMatchesUnlocked(query.MatchPattern, query.WhereClause)
+
+	// Apply semantic WHERE conditions: WHERE p SIMILAR TO "..."
+	if query.WhereClause != nil && len(query.WhereClause.SemanticConditions) > 0 {
+		var err error
+		matches, err = g.filterSemanticUnlocked(matches, query.WhereClause.SemanticConditions, embedder)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// OPTIONAL MATCH: if no rows were found, produce one empty row so that
+	// downstream RETURN items resolve to null rather than nothing.
+	if query.Optional && len(matches) == 0 {
+		matches = []Match{{}}
+	}
+
 	return buildResult(matches, query.ReturnClause), nil
+}
+
+// filterSemanticUnlocked filters matches by embedding similarity (caller holds read lock).
+func (g *DiskGraph) filterSemanticUnlocked(matches []Match, semConds []GraphSemanticCondition, embedder Embedder) ([]Match, error) {
+	if embedder == nil {
+		return nil, fmt.Errorf("embedder required for SIMILAR TO in WHERE clause")
+	}
+
+	// Load all current embeddings from disk once
+	allEmbs, err := g.boltStore.GetAllEmbeddings()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load embeddings: %w", err)
+	}
+	embStore := embedding.NewStore()
+	for nodeID, embs := range allEmbs {
+		for _, emb := range embs {
+			emb.NodeID = nodeID
+			embStore.LoadEmbedding(emb)
+		}
+	}
+
+	// Pre-compute one query vector per semantic condition
+	type semFilter struct {
+		variable  string
+		vector    []float32
+		threshold float32
+	}
+	var filters []semFilter
+	for _, cond := range semConds {
+		vec, err := embedder.Embed(cond.QueryText)
+		if err != nil {
+			return nil, fmt.Errorf("failed to embed query %q: %w", cond.QueryText, err)
+		}
+		filters = append(filters, semFilter{cond.Variable, vec, cond.Threshold})
+	}
+
+	var result []Match
+	for _, match := range matches {
+		allPass := true
+		for _, f := range filters {
+			entity, ok := match[f.variable]
+			if !ok {
+				allPass = false
+				break
+			}
+			node, ok := entity.(*Node)
+			if !ok {
+				allPass = false
+				break
+			}
+			emb := embStore.GetCurrent(node.ID)
+			if emb == nil {
+				allPass = false
+				break
+			}
+			sim := embedding.CosineSimilarity(f.vector, emb.Vector)
+			if f.threshold > 0 && sim < f.threshold {
+				allPass = false
+				break
+			}
+		}
+		if allPass {
+			result = append(result, match)
+		}
+	}
+	return result, nil
 }
 
 // ============================================================================
 // Path queries
 // ============================================================================
 
-// executePathQueryUnlocked handles shortestPath / allShortestPaths (caller holds read lock).
+// executePathQueryUnlocked handles shortestPath / allShortestPaths / earliestPath (caller holds read lock).
 func (g *DiskGraph) executePathQueryUnlocked(query *Query) (*QueryResult, error) {
 	pf := query.MatchPattern.PathFunction
+
+	// Earliest arrival path — temporal Dijkstra, independent of AT TIME
+	if pf.Function == "earliestpath" {
+		return g.executeEarliestPathUnlocked(query)
+	}
+
+	// Temporal path query — build snapshot and run BFS/DFS against it
+	if query.TimeClause != nil {
+		snap, err := g.buildSnapshotFromTimeClause(query.TimeClause)
+		if err != nil || snap == nil {
+			return &QueryResult{Columns: []string{pf.Variable}, Rows: []map[string]interface{}{}}, nil
+		}
+		startNodes := filterNodesByWhere(candidateNodesInSnapshot(snap, pf.StartPattern), pf.StartPattern.Variable, query.WhereClause)
+		endNodes := filterNodesByWhere(candidateNodesInSnapshot(snap, pf.EndPattern), pf.EndPattern.Variable, query.WhereClause)
+		result := &QueryResult{Columns: []string{pf.Variable}, Rows: []map[string]interface{}{}}
+		for _, startNode := range startNodes {
+			for _, endNode := range endNodes {
+				if startNode.ID == endNode.ID {
+					continue
+				}
+				switch pf.Function {
+				case "shortestpath":
+					if path := shortestPathInSnapshot(snap, startNode.ID, endNode.ID); path != nil {
+						result.Rows = append(result.Rows, map[string]interface{}{pf.Variable: path})
+					}
+				case "allshortestpaths":
+					maxDepth := pf.MaxDepth
+					if maxDepth == 0 {
+						maxDepth = 10
+					}
+					for _, path := range allPathsInSnapshot(snap, startNode.ID, endNode.ID, maxDepth) {
+						result.Rows = append(result.Rows, map[string]interface{}{pf.Variable: path})
+					}
+				}
+			}
+		}
+		return result, nil
+	}
 
 	startCandidates := g.candidateNodesUnlocked(pf.StartPattern)
 	endCandidates := g.candidateNodesUnlocked(pf.EndPattern)
@@ -301,6 +504,366 @@ func (g *DiskGraph) executePathQueryUnlocked(query *Query) (*QueryResult, error)
 		}
 	}
 	return result, nil
+}
+
+// ============================================================================
+// Earliest arrival path — temporal Dijkstra
+// ============================================================================
+
+// earliestHeapItem is one entry in the Dijkstra priority queue.
+type earliestHeapItem struct {
+	arrivalTime time.Time
+	nodeID      string
+}
+
+type earliestHeap []earliestHeapItem
+
+func (h earliestHeap) Len() int            { return len(h) }
+func (h earliestHeap) Less(i, j int) bool  { return h[i].arrivalTime.Before(h[j].arrivalTime) }
+func (h earliestHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h *earliestHeap) Push(x interface{}) { *h = append(*h, x.(earliestHeapItem)) }
+func (h *earliestHeap) Pop() interface{} {
+	old := *h
+	item := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return item
+}
+
+type earliestParent struct {
+	rel        *Relationship
+	previousID string
+}
+
+// executeEarliestPathUnlocked runs earliestPath() — finds the temporally earliest route
+// from startNode to endNode by treating arrival_time as the Dijkstra cost.
+// Traversal considers ALL relationships regardless of ValidTo, so historical edges count.
+func (g *DiskGraph) executeEarliestPathUnlocked(query *Query) (*QueryResult, error) {
+	pf := query.MatchPattern.PathFunction
+	result := &QueryResult{
+		Columns: []string{pf.Variable, "arrival_time"},
+		Rows:    []map[string]interface{}{},
+	}
+
+	// Load full temporal data (including expired relationships / old node versions)
+	allNodesList, err := g.boltStore.GetAllNodes()
+	if err != nil {
+		return nil, err
+	}
+	allRelsList, err := g.boltStore.GetAllRelationships()
+	if err != nil {
+		return nil, err
+	}
+
+	// Build node map: keep the earliest version of each node (lowest ValidFrom = birth time)
+	allNodes := make(map[string]*Node, len(allNodesList))
+	for _, n := range allNodesList {
+		if existing, ok := allNodes[n.ID]; !ok || n.ValidFrom.Before(existing.ValidFrom) {
+			allNodes[n.ID] = n
+		}
+	}
+
+	// Build adjacency list: forward direction only (From → To), respecting -[*]->
+	relsByNode := make(map[string][]*Relationship, len(allNodes))
+	for _, rel := range allRelsList {
+		relsByNode[rel.FromNodeID] = append(relsByNode[rel.FromNodeID], rel)
+	}
+
+	// Start/end candidates are currently-alive nodes matching the patterns
+	startNodes := filterNodesByWhere(g.candidateNodesUnlocked(pf.StartPattern), pf.StartPattern.Variable, query.WhereClause)
+	endNodes := filterNodesByWhere(g.candidateNodesUnlocked(pf.EndPattern), pf.EndPattern.Variable, query.WhereClause)
+
+	for _, startNode := range startNodes {
+		for _, endNode := range endNodes {
+			if startNode.ID == endNode.ID {
+				continue
+			}
+			path, arrivalTime := earliestPathDijkstra(allNodes, relsByNode, startNode.ID, endNode.ID)
+			if path != nil {
+				result.Rows = append(result.Rows, map[string]interface{}{
+					pf.Variable:   path,
+					"arrival_time": arrivalTime.Format(time.RFC3339),
+				})
+			}
+		}
+	}
+	return result, nil
+}
+
+// earliestPathDijkstra finds the path from fromID to toID that minimises arrival time.
+// Cost of traversing a relationship = max(current_arrival_time, rel.ValidFrom).
+func earliestPathDijkstra(
+	allNodes map[string]*Node,
+	relsByNode map[string][]*Relationship,
+	fromID, toID string,
+) (*Path, time.Time) {
+	startNode, ok := allNodes[fromID]
+	if !ok {
+		return nil, time.Time{}
+	}
+
+	dist := make(map[string]time.Time)
+	parent := make(map[string]*earliestParent)
+
+	h := &earliestHeap{}
+	heap.Init(h)
+
+	dist[fromID] = startNode.ValidFrom
+	heap.Push(h, earliestHeapItem{arrivalTime: startNode.ValidFrom, nodeID: fromID})
+
+	for h.Len() > 0 {
+		cur := heap.Pop(h).(earliestHeapItem)
+		nodeID := cur.nodeID
+		t := cur.arrivalTime
+
+		// Stale entry — already found a better path to this node
+		if best, ok := dist[nodeID]; ok && t.After(best) {
+			continue
+		}
+
+		if nodeID == toID {
+			break
+		}
+
+		for _, rel := range relsByNode[nodeID] {
+			// Relationship expired before we arrived — can't use it
+			if rel.ValidTo != nil && rel.ValidTo.Before(t) {
+				continue
+			}
+
+			// Arrival at neighbor = max(now, when the relationship became valid)
+			arrivalAtNeighbor := t
+			if rel.ValidFrom.After(t) {
+				arrivalAtNeighbor = rel.ValidFrom
+			}
+
+			neighborID := rel.ToNodeID
+
+			// Neighbor must have existed by the time we arrive
+			neighbor, ok := allNodes[neighborID]
+			if !ok || neighbor.ValidFrom.After(arrivalAtNeighbor) {
+				continue
+			}
+
+			if best, seen := dist[neighborID]; !seen || arrivalAtNeighbor.Before(best) {
+				dist[neighborID] = arrivalAtNeighbor
+				parent[neighborID] = &earliestParent{rel: rel, previousID: nodeID}
+				heap.Push(h, earliestHeapItem{arrivalTime: arrivalAtNeighbor, nodeID: neighborID})
+			}
+		}
+	}
+
+	arrivalTime, reached := dist[toID]
+	if !reached {
+		return nil, time.Time{}
+	}
+
+	// Reconstruct path back-to-front
+	path := &Path{}
+	curID := toID
+	for curID != fromID {
+		step := parent[curID]
+		if step == nil {
+			return nil, time.Time{}
+		}
+		path.Nodes = append([]*Node{allNodes[curID]}, path.Nodes...)
+		path.Relationships = append([]*Relationship{step.rel}, path.Relationships...)
+		curID = step.previousID
+	}
+	path.Nodes = append([]*Node{allNodes[fromID]}, path.Nodes...)
+	path.Length = len(path.Relationships)
+
+	return path, arrivalTime
+}
+
+// buildSnapshotFromTimeClause resolves a TimeClause and returns a temporalSnapshot.
+func (g *DiskGraph) buildSnapshotFromTimeClause(tc *TimeClause) (*temporalSnapshot, error) {
+	var queryTime time.Time
+	if tc.Mode == "EARLIEST" {
+		allNodes, _ := g.boltStore.GetAllNodes()
+		allRels, _ := g.boltStore.GetAllRelationships()
+		var earliest *time.Time
+		for _, n := range allNodes {
+			if earliest == nil || n.ValidFrom.Before(*earliest) {
+				t := n.ValidFrom
+				earliest = &t
+			}
+		}
+		for _, r := range allRels {
+			if earliest == nil || r.ValidFrom.Before(*earliest) {
+				t := r.ValidFrom
+				earliest = &t
+			}
+		}
+		if earliest == nil {
+			return nil, nil
+		}
+		queryTime = *earliest
+	} else {
+		queryTime = time.Unix(tc.Timestamp, 0)
+	}
+	allNodes, _ := g.boltStore.GetAllNodes()
+	allRels, _ := g.boltStore.GetAllRelationships()
+	return buildTemporalSnapshot(allNodes, allRels, queryTime), nil
+}
+
+// candidateNodesInSnapshot returns nodes from a snapshot matching a node pattern.
+func candidateNodesInSnapshot(snap *temporalSnapshot, pattern NodePattern) []*Node {
+	var candidates []*Node
+	if len(pattern.Labels) > 0 {
+		for _, id := range snap.nodesByLabel[pattern.Labels[0]] {
+			if n, ok := snap.nodes[id]; ok {
+				candidates = append(candidates, n)
+			}
+		}
+	} else {
+		for _, n := range snap.nodes {
+			candidates = append(candidates, n)
+		}
+	}
+	if len(pattern.Properties) > 0 {
+		var filtered []*Node
+		for _, n := range candidates {
+			if matchesProperties(n.Properties, pattern.Properties) {
+				filtered = append(filtered, n)
+			}
+		}
+		return filtered
+	}
+	return candidates
+}
+
+// shortestPathInSnapshot runs BFS against a temporal snapshot.
+func shortestPathInSnapshot(snap *temporalSnapshot, fromID, toID string) *Path {
+	if _, ok := snap.nodes[fromID]; !ok {
+		return nil
+	}
+	if _, ok := snap.nodes[toID]; !ok {
+		return nil
+	}
+
+	queue := []string{fromID}
+	visited := map[string]bool{fromID: true}
+	parent := map[string]*diskPathStep{}
+
+	for len(queue) > 0 {
+		currentID := queue[0]
+		queue = queue[1:]
+
+		if currentID == toID {
+			return reconstructPathInSnapshot(snap, fromID, toID, parent)
+		}
+
+		for _, relID := range snap.nodeRelIndex[currentID] {
+			rel, ok := snap.rels[relID]
+			if !ok {
+				continue
+			}
+			var neighborID string
+			if rel.FromNodeID == currentID {
+				neighborID = rel.ToNodeID
+			} else {
+				neighborID = rel.FromNodeID
+			}
+			if !visited[neighborID] {
+				if _, ok := snap.nodes[neighborID]; !ok {
+					continue
+				}
+				visited[neighborID] = true
+				parent[neighborID] = &diskPathStep{rel: rel, previousID: currentID}
+				queue = append(queue, neighborID)
+			}
+		}
+	}
+	return nil
+}
+
+func reconstructPathInSnapshot(snap *temporalSnapshot, fromID, toID string, parent map[string]*diskPathStep) *Path {
+	path := &Path{Nodes: []*Node{}, Relationships: []*Relationship{}}
+	current := toID
+	var steps []string
+	var rels []*Relationship
+	for current != fromID {
+		steps = append(steps, current)
+		step := parent[current]
+		if step == nil {
+			return nil
+		}
+		rels = append(rels, step.rel)
+		current = step.previousID
+	}
+	steps = append(steps, fromID)
+	for i := len(steps) - 1; i >= 0; i-- {
+		if node, ok := snap.nodes[steps[i]]; ok {
+			path.Nodes = append(path.Nodes, node)
+		}
+	}
+	for i := len(rels) - 1; i >= 0; i-- {
+		path.Relationships = append(path.Relationships, rels[i])
+	}
+	path.Length = len(path.Relationships)
+	return path
+}
+
+// allPathsInSnapshot runs DFS against a temporal snapshot.
+func allPathsInSnapshot(snap *temporalSnapshot, fromID, toID string, maxDepth int) []*Path {
+	if _, ok := snap.nodes[fromID]; !ok {
+		return nil
+	}
+	if _, ok := snap.nodes[toID]; !ok {
+		return nil
+	}
+	var paths []*Path
+	visited := make(map[string]bool)
+	currentPath := &Path{Nodes: []*Node{}, Relationships: []*Relationship{}}
+	dfsAllPathsInSnapshot(snap, fromID, toID, visited, currentPath, &paths, maxDepth, 0)
+	return paths
+}
+
+func dfsAllPathsInSnapshot(snap *temporalSnapshot, currentID, targetID string, visited map[string]bool, currentPath *Path, allPaths *[]*Path, maxDepth, depth int) {
+	if maxDepth > 0 && depth >= maxDepth {
+		return
+	}
+	visited[currentID] = true
+	currentNode, ok := snap.nodes[currentID]
+	if !ok {
+		visited[currentID] = false
+		return
+	}
+	currentPath.Nodes = append(currentPath.Nodes, currentNode)
+
+	if currentID == targetID {
+		pathCopy := &Path{
+			Nodes:         make([]*Node, len(currentPath.Nodes)),
+			Relationships: make([]*Relationship, len(currentPath.Relationships)),
+			Length:        len(currentPath.Relationships),
+		}
+		copy(pathCopy.Nodes, currentPath.Nodes)
+		copy(pathCopy.Relationships, currentPath.Relationships)
+		*allPaths = append(*allPaths, pathCopy)
+	} else {
+		for _, relID := range snap.nodeRelIndex[currentID] {
+			rel, ok := snap.rels[relID]
+			if !ok {
+				continue
+			}
+			var neighborID string
+			if rel.FromNodeID == currentID {
+				neighborID = rel.ToNodeID
+			} else {
+				neighborID = rel.FromNodeID
+			}
+			if !visited[neighborID] {
+				if _, ok := snap.nodes[neighborID]; !ok {
+					continue
+				}
+				currentPath.Relationships = append(currentPath.Relationships, rel)
+				dfsAllPathsInSnapshot(snap, neighborID, targetID, visited, currentPath, allPaths, maxDepth, depth+1)
+				currentPath.Relationships = currentPath.Relationships[:len(currentPath.Relationships)-1]
+			}
+		}
+	}
+	currentPath.Nodes = currentPath.Nodes[:len(currentPath.Nodes)-1]
+	visited[currentID] = false
 }
 
 // candidateNodesUnlocked returns all currently-valid nodes matching a node pattern.
@@ -345,7 +908,11 @@ func filterNodesByWhere(nodes []*Node, variable string, where *WhereClause) []*N
 			if cond.Variable != variable {
 				continue
 			}
-			if !evaluateCondition(n.Properties[cond.Property], cond.Operator, cond.Value) {
+			propVal := n.Properties[cond.Property]
+			if cond.FunctionName != "" {
+				propVal = applyScalarFunction(cond.FunctionName, propVal)
+			}
+			if !evaluateCondition(propVal, cond.Operator, cond.Value) {
 				ok = false
 				break
 			}
@@ -739,6 +1306,16 @@ func findMatchesInSnapshot(snap *temporalSnapshot, pattern *MatchPattern, where 
 
 // filterMatchesInSnapshot applies WHERE conditions to snapshot matches.
 func filterMatchesInSnapshot(matches []Match, where *WhereClause) []Match {
+	if where.BoolExpr != nil {
+		var result []Match
+		for _, match := range matches {
+			if evalBoolExpr(where.BoolExpr, match) {
+				result = append(result, match)
+			}
+		}
+		return result
+	}
+
 	var result []Match
 	for _, match := range matches {
 		allMatch := true
@@ -748,16 +1325,21 @@ func filterMatchesInSnapshot(matches []Match, where *WhereClause) []Match {
 				allMatch = false
 				break
 			}
-			var props map[string]interface{}
+			var propVal interface{}
 			if node, ok := entity.(*Node); ok {
-				props = node.Properties
+				propVal = node.Properties[cond.Property]
 			} else if rel, ok := entity.(*Relationship); ok {
-				props = rel.Properties
+				propVal = rel.Properties[cond.Property]
+			} else if cond.Property == "" {
+				propVal = entity
 			} else {
 				allMatch = false
 				break
 			}
-			if !evaluateCondition(props[cond.Property], cond.Operator, cond.Value) {
+			if cond.FunctionName != "" {
+				propVal = applyScalarFunction(cond.FunctionName, propVal)
+			}
+			if !evaluateCondition(propVal, cond.Operator, cond.Value) {
 				allMatch = false
 				break
 			}
@@ -767,6 +1349,236 @@ func filterMatchesInSnapshot(matches []Match, where *WhereClause) []Match {
 		}
 	}
 	return result
+}
+
+// ============================================================================
+// Pipeline (WITH clause) execution
+// ============================================================================
+
+// executePipelineQuery handles queries that chain MATCH stages via WITH.
+func (g *DiskGraph) executePipelineQuery(query *Query, embedder Embedder) (*QueryResult, error) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	pipeline := query.Pipeline
+
+	// Start with one empty binding so stage 0 can merge into it
+	currentBindings := []Match{{}}
+
+	for _, stage := range pipeline.Stages {
+		var nextBindings []Match
+
+		for _, binding := range currentBindings {
+			var matches []Match
+			if stage.MatchPattern != nil {
+				matches = g.findMatchesWithExisting(stage.MatchPattern, stage.WhereClause, binding)
+			} else {
+				matches = []Match{copyMatch(binding)}
+			}
+
+			for _, match := range matches {
+				if len(stage.WithVars) > 0 {
+					// Project through WITH — keep only the listed variables
+					projected := make(Match, len(stage.WithVars))
+					for _, v := range stage.WithVars {
+						if val, ok := match[v]; ok {
+							projected[v] = val
+						}
+					}
+					nextBindings = append(nextBindings, projected)
+				} else {
+					// Final stage (no explicit WITH) — keep everything
+					nextBindings = append(nextBindings, match)
+				}
+			}
+		}
+
+		currentBindings = nextBindings
+	}
+
+	return buildResult(currentBindings, query.ReturnClause), nil
+}
+
+// findMatchesWithExisting is like findMatchesUnlocked but seeds the search with
+// an existing binding. If the first node pattern's variable is already bound, that
+// node is used as the anchor; otherwise the normal label/property index scan runs.
+func (g *DiskGraph) findMatchesWithExisting(pattern *MatchPattern, where *WhereClause, existing Match) []Match {
+	if pattern == nil || len(pattern.Nodes) == 0 {
+		return []Match{copyMatch(existing)}
+	}
+
+	firstPattern := pattern.Nodes[0]
+	var candidateNodes []*Node
+
+	// Anchor: use the already-bound node directly
+	if firstPattern.Variable != "" {
+		if entity, ok := existing[firstPattern.Variable]; ok {
+			if node, ok := entity.(*Node); ok {
+				candidateNodes = []*Node{node}
+			}
+		}
+	}
+
+	// Fall back to label/property index scan
+	if candidateNodes == nil {
+		if len(firstPattern.Labels) > 0 {
+			nodeIDs := g.labelIndex[firstPattern.Labels[0]]
+			for _, id := range nodeIDs {
+				if n := g.getNodeUnlocked(id); n != nil && n.ValidTo == nil {
+					candidateNodes = append(candidateNodes, n)
+				}
+			}
+		} else {
+			allNodes, _ := g.boltStore.GetAllNodes()
+			for _, n := range allNodes {
+				if n.ValidTo == nil {
+					candidateNodes = append(candidateNodes, n)
+				}
+			}
+		}
+		if len(firstPattern.Properties) > 0 {
+			var filtered []*Node
+			for _, n := range candidateNodes {
+				if matchesProperties(n.Properties, firstPattern.Properties) {
+					filtered = append(filtered, n)
+				}
+			}
+			candidateNodes = filtered
+		}
+	}
+
+	// Seed initial matches from existing binding
+	var matches []Match
+	for _, node := range candidateNodes {
+		m := copyMatch(existing)
+		if firstPattern.Variable != "" {
+			m[firstPattern.Variable] = node
+		}
+		matches = append(matches, m)
+	}
+
+	// Single-node pattern
+	if len(pattern.Nodes) == 1 && len(pattern.Relationships) == 0 {
+		if where != nil {
+			matches = g.filterMatchesUnlocked(matches, where)
+		}
+		return matches
+	}
+
+	// Expand relationship patterns
+	for _, relPattern := range pattern.Relationships {
+		var newMatches []Match
+
+		for _, match := range matches {
+			fromIdx := relPattern.FromIndex
+			if fromIdx >= len(pattern.Nodes) {
+				continue
+			}
+			fromVar := pattern.Nodes[fromIdx].Variable
+			fromEntity, ok := match[fromVar]
+			if !ok {
+				continue
+			}
+			fromNode, ok := fromEntity.(*Node)
+			if !ok {
+				continue
+			}
+
+			rels := g.getRelationshipsForNodeUnlocked(fromNode.ID)
+			for _, rel := range rels {
+				if len(relPattern.Types) > 0 {
+					typeMatch := false
+					for _, t := range relPattern.Types {
+						if rel.Type == t {
+							typeMatch = true
+							break
+						}
+					}
+					if !typeMatch {
+						continue
+					}
+				}
+
+				var targetNodeID string
+				if relPattern.Direction == "->" {
+					if rel.FromNodeID != fromNode.ID {
+						continue
+					}
+					targetNodeID = rel.ToNodeID
+				} else if relPattern.Direction == "<-" {
+					if rel.ToNodeID != fromNode.ID {
+						continue
+					}
+					targetNodeID = rel.FromNodeID
+				} else {
+					if rel.FromNodeID == fromNode.ID {
+						targetNodeID = rel.ToNodeID
+					} else {
+						targetNodeID = rel.FromNodeID
+					}
+				}
+
+				targetNode := g.getNodeUnlocked(targetNodeID)
+				if targetNode == nil || targetNode.ValidTo != nil {
+					continue
+				}
+
+				toIdx := relPattern.ToIndex
+				if toIdx >= len(pattern.Nodes) {
+					continue
+				}
+				toPattern := pattern.Nodes[toIdx]
+
+				// If the target variable is already bound, it must match
+				if toPattern.Variable != "" {
+					if boundEntity, ok := existing[toPattern.Variable]; ok {
+						if boundNode, ok := boundEntity.(*Node); ok {
+							if targetNode.ID != boundNode.ID {
+								continue
+							}
+						}
+					}
+				}
+
+				if len(toPattern.Labels) > 0 {
+					hasLabel := false
+					for _, reqLabel := range toPattern.Labels {
+						for _, nodeLabel := range targetNode.Labels {
+							if reqLabel == nodeLabel {
+								hasLabel = true
+								break
+							}
+						}
+						if hasLabel {
+							break
+						}
+					}
+					if !hasLabel {
+						continue
+					}
+				}
+
+				if len(toPattern.Properties) > 0 && !matchesProperties(targetNode.Properties, toPattern.Properties) {
+					continue
+				}
+
+				newMatch := copyMatch(match)
+				if toPattern.Variable != "" {
+					newMatch[toPattern.Variable] = targetNode
+				}
+				if relPattern.Variable != "" {
+					newMatch[relPattern.Variable] = rel
+				}
+				newMatches = append(newMatches, newMatch)
+			}
+		}
+		matches = newMatches
+	}
+
+	if where != nil {
+		matches = g.filterMatchesUnlocked(matches, where)
+	}
+	return matches
 }
 
 // findMatchesUnlocked finds pattern matches using indexes (caller must hold lock)
@@ -1011,7 +1823,22 @@ func (g *DiskGraph) findMatchesUnlocked(pattern *MatchPattern, where *WhereClaus
 
 // filterMatchesUnlocked applies WHERE conditions (caller must hold lock)
 func (g *DiskGraph) filterMatchesUnlocked(matches []map[string]interface{}, where *WhereClause) []map[string]interface{} {
-	if where == nil || len(where.Conditions) == 0 {
+	if where == nil {
+		return matches
+	}
+
+	// Full expression tree is available: handles OR, NOT, functions, etc.
+	if where.BoolExpr != nil {
+		var result []map[string]interface{}
+		for _, match := range matches {
+			if evalBoolExpr(where.BoolExpr, match) {
+				result = append(result, match)
+			}
+		}
+		return result
+	}
+
+	if len(where.Conditions) == 0 {
 		return matches
 	}
 
@@ -1025,20 +1852,21 @@ func (g *DiskGraph) filterMatchesUnlocked(matches []map[string]interface{}, wher
 				break
 			}
 
-			var props map[string]interface{}
+			var propVal interface{}
 			if node, ok := entity.(*Node); ok {
-				props = node.Properties
+				propVal = node.Properties[cond.Property]
 			} else if rel, ok := entity.(*Relationship); ok {
-				props = rel.Properties
+				propVal = rel.Properties[cond.Property]
+			} else if cond.Property == "" {
+				// Scalar variable (e.g. from UNWIND)
+				propVal = entity
 			} else {
 				allMatch = false
 				break
 			}
 
-			propVal, exists := props[cond.Property]
-			if !exists {
-				allMatch = false
-				break
+			if cond.FunctionName != "" {
+				propVal = applyScalarFunction(cond.FunctionName, propVal)
 			}
 
 			if !evaluateCondition(propVal, cond.Operator, cond.Value) {

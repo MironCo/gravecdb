@@ -518,10 +518,14 @@ func (p *Parser) parsePatternPart() *PatternPart {
 		p.nextToken() // consume =
 	}
 
-	// Check for shortestPath or allShortestPaths
-	if p.curTokenIs(TOKEN_SHORTESTPATH) || p.curTokenIs(TOKEN_ALLSHORTESTPATHS) {
+	// Check for shortestPath, allShortestPaths, or earliestPath
+	if p.curTokenIs(TOKEN_SHORTESTPATH) || p.curTokenIs(TOKEN_ALLSHORTESTPATHS) || p.curTokenIs(TOKEN_EARLIESTPATH) {
 		sp := p.parseShortestPath()
 		if sp != nil {
+			// Propagate the outer path variable (e.g. "p" in MATCH p = shortestPath(...))
+			if sp.Variable == "" {
+				sp.Variable = part.Variable
+			}
 			part.Elements = append(part.Elements, sp)
 		}
 		return part
@@ -744,12 +748,14 @@ var precedences = map[TokenType]int{
 	TOKEN_LTE:      COMPARISON,
 	TOKEN_GTE:      COMPARISON,
 	TOKEN_IN:       COMPARISON,
+	TOKEN_SIMILAR:  COMPARISON,
 	TOKEN_CONTAINS: COMPARISON,
 	TOKEN_STARTS:   COMPARISON,
 	TOKEN_ENDS:     COMPARISON,
 	TOKEN_IS:       COMPARISON,
 	TOKEN_PLUS:     ADDITIVE,
 	TOKEN_MINUS:    ADDITIVE,
+	TOKEN_DASH:     ADDITIVE,
 	TOKEN_STAR:     MULTIPLICATIVE,
 	TOKEN_SLASH:    MULTIPLICATIVE,
 	TOKEN_PERCENT:  MULTIPLICATIVE,
@@ -799,7 +805,7 @@ func (p *Parser) parseExpression(precedence int) Expression {
 		left = p.parseGroupedExpression()
 	case TOKEN_NOT:
 		left = p.parseNotExpression()
-	case TOKEN_MINUS:
+	case TOKEN_MINUS, TOKEN_DASH:
 		left = p.parseNegationExpression()
 	case TOKEN_CASE:
 		left = p.parseCaseExpression()
@@ -822,7 +828,7 @@ func (p *Parser) parseExpression(precedence int) Expression {
 			left = p.parsePropertyAccess(left)
 		case TOKEN_LBRACKET:
 			left = p.parseIndexAccess(left)
-		case TOKEN_PLUS, TOKEN_MINUS, TOKEN_STAR, TOKEN_SLASH, TOKEN_PERCENT, TOKEN_CARET:
+		case TOKEN_PLUS, TOKEN_MINUS, TOKEN_DASH, TOKEN_STAR, TOKEN_SLASH, TOKEN_PERCENT, TOKEN_CARET:
 			left = p.parseBinaryExpression(left)
 		case TOKEN_AND, TOKEN_OR, TOKEN_XOR:
 			left = p.parseBinaryExpression(left)
@@ -838,6 +844,8 @@ func (p *Parser) parseExpression(precedence int) Expression {
 			left = p.parseStartsWithExpression(left)
 		case TOKEN_ENDS:
 			left = p.parseEndsWithExpression(left)
+		case TOKEN_SIMILAR:
+			left = p.parseSimilarToInWhereExpression(left)
 		default:
 			return left
 		}
@@ -1085,6 +1093,48 @@ func (p *Parser) parseEndsWithExpression(left Expression) Expression {
 	p.nextToken()
 	right := p.parseExpression(COMPARISON)
 	return &ComparisonExpression{Left: left, Operator: "ENDS WITH", Right: right}
+}
+
+// parseSimilarToInWhereExpression parses `variable SIMILAR TO "query" [THRESHOLD x]`
+// inside a WHERE clause, producing a SimilarToExpression.
+func (p *Parser) parseSimilarToInWhereExpression(left Expression) Expression {
+	ident, ok := left.(*Identifier)
+	if !ok {
+		p.addError("expected identifier before SIMILAR TO")
+		return nil
+	}
+	p.nextToken() // consume SIMILAR
+	if !p.curTokenIs(TOKEN_TO) {
+		p.addError("expected TO after SIMILAR")
+		return nil
+	}
+	p.nextToken() // consume TO
+
+	queryExpr := p.parseExpression(COMPARISON)
+	str, ok := queryExpr.(*StringLiteral)
+	if !ok {
+		p.addError("expected string literal after SIMILAR TO")
+		return nil
+	}
+
+	expr := &SimilarToExpression{
+		Variable:  ident.Name,
+		Query:     str.Value,
+		Threshold: 0, // 0 means no minimum threshold
+	}
+
+	if p.curTokenIs(TOKEN_THRESHOLD) {
+		p.nextToken()
+		threshExpr := p.parseExpression(LOWEST)
+		switch v := threshExpr.(type) {
+		case *FloatLiteral:
+			expr.Threshold = float32(v.Value)
+		case *IntegerLiteral:
+			expr.Threshold = float32(v.Value)
+		}
+	}
+
+	return expr
 }
 
 func (p *Parser) parseFunctionCall() Expression {

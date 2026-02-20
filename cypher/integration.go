@@ -29,7 +29,26 @@ type GraphQuery struct {
 	TimeClause      *GraphTimeClause
 	EmbedClause     *GraphEmbedClause
 	SimilarToClause *GraphSimilarToClause
+	UnwindClause    *GraphUnwindClause
+	MergeClause     *GraphCreateClause // reuses create structure; execution differs
+	Pipeline        *GraphPipeline     // set when WITH clause is present
 	IsPathQuery     bool
+	Optional        bool               // true when OPTIONAL MATCH (no-match → one empty row)
+}
+
+// GraphPipelineStage is one MATCH+WHERE step in a WITH-chained query.
+// WithVars lists the variable names projected by the WITH clause after this stage
+// (empty means this is the final stage before RETURN).
+type GraphPipelineStage struct {
+	MatchPattern *GraphMatchPattern
+	WhereClause  *GraphWhereClause
+	WithVars     []string // variables kept after WITH projection
+}
+
+// GraphPipeline represents a multi-stage query connected by WITH clauses.
+type GraphPipeline struct {
+	Stages      []GraphPipelineStage
+	FinalReturn *GraphReturnClause
 }
 
 type GraphMatchPattern struct {
@@ -96,14 +115,23 @@ type GraphDeleteClause struct {
 }
 
 type GraphWhereClause struct {
-	Conditions []GraphCondition
+	Conditions         []GraphCondition
+	SemanticConditions []GraphSemanticCondition
+	BoolExpr           Expression // full parsed tree; used when Conditions can't represent it (OR, NOT, etc.)
 }
 
 type GraphCondition struct {
-	Variable string
-	Property string
-	Operator string
-	Value    interface{}
+	Variable     string
+	Property     string
+	FunctionName string      // e.g. "toupper" — applied to the property value before comparing
+	Operator     string
+	Value        interface{}
+}
+
+type GraphSemanticCondition struct {
+	Variable  string
+	QueryText string
+	Threshold float32
 }
 
 type GraphReturnClause struct {
@@ -115,10 +143,12 @@ type GraphReturnClause struct {
 }
 
 type GraphReturnItem struct {
-	Variable    string
-	Property    string
-	Aggregation string // COUNT, SUM, AVG, MIN, MAX, COLLECT
-	Alias       string
+	Variable     string
+	Property     string
+	Aggregation  string     // COUNT, SUM, AVG, MIN, MAX, COLLECT
+	FunctionName string     // non-aggregation function: "duration", "toupper", etc.
+	Alias        string
+	Expr         Expression // non-nil for CASE WHEN and other complex expressions
 }
 
 type GraphOrderItem struct {
@@ -139,6 +169,11 @@ type GraphEmbedClause struct {
 	Property string
 }
 
+type GraphUnwindClause struct {
+	List     []interface{}
+	Variable string
+}
+
 type GraphSimilarToClause struct {
 	Variable    string
 	QueryText   string
@@ -150,12 +185,20 @@ type GraphSimilarToClause struct {
 
 // ConvertToGraphQuery converts the AST to graph-compatible query
 func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
+	// If the query contains a WITH clause, build a multi-stage pipeline instead
+	for _, clause := range ast.Clauses {
+		if _, ok := clause.(*WithClause); ok {
+			return buildPipelineQuery(ast)
+		}
+	}
+
 	gq := &GraphQuery{}
 
 	for _, clause := range ast.Clauses {
 		switch c := clause.(type) {
 		case *MatchClause:
 			gq.QueryType = "MATCH"
+			gq.Optional = c.Optional
 			pattern, err := convertPatternToGraph(c.Pattern)
 			if err != nil {
 				return nil, err
@@ -214,6 +257,20 @@ func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
 		case *SimilarToClause:
 			stc := convertSimilarToGraph(c)
 			gq.SimilarToClause = stc
+
+		case *UnwindClause:
+			gq.QueryType = "UNWIND"
+			gq.UnwindClause = convertUnwindToGraph(c)
+
+		case *MergeClause:
+			if gq.QueryType == "" {
+				gq.QueryType = "MERGE"
+			}
+			mc, err := convertCreateToGraph(&CreateClause{Pattern: c.Pattern})
+			if err != nil {
+				return nil, err
+			}
+			gq.MergeClause = mc
 		}
 	}
 
@@ -377,50 +434,75 @@ func convertCreateToGraph(c *CreateClause) (*GraphCreateClause, error) {
 }
 
 func convertWhereToGraph(w *WhereClause) (*GraphWhereClause, error) {
-	gw := &GraphWhereClause{
-		Conditions: []GraphCondition{},
-	}
+	gw := &GraphWhereClause{}
 
-	conditions, err := extractGraphConditions(w.Condition)
+	conditions, semanticConditions, err := extractGraphConditions(w.Condition)
 	if err != nil {
 		return nil, err
 	}
 	gw.Conditions = conditions
+	gw.SemanticConditions = semanticConditions
+	gw.BoolExpr = w.Condition // full tree for OR / NOT / function evaluation
 
 	return gw, nil
 }
 
-func extractGraphConditions(expr Expression) ([]GraphCondition, error) {
+func extractGraphConditions(expr Expression) ([]GraphCondition, []GraphSemanticCondition, error) {
 	var conditions []GraphCondition
+	var semanticConditions []GraphSemanticCondition
 
 	switch e := expr.(type) {
 	case *BinaryExpression:
 		if e.Operator == "AND" || e.Operator == "and" {
-			left, err := extractGraphConditions(e.Left)
+			lc, ls, err := extractGraphConditions(e.Left)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			right, err := extractGraphConditions(e.Right)
+			rc, rs, err := extractGraphConditions(e.Right)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			conditions = append(conditions, left...)
-			conditions = append(conditions, right...)
+			conditions = append(conditions, lc...)
+			conditions = append(conditions, rc...)
+			semanticConditions = append(semanticConditions, ls...)
+			semanticConditions = append(semanticConditions, rs...)
 		}
 
 	case *ComparisonExpression:
 		cond := GraphCondition{Operator: e.Operator}
-		if prop, ok := e.Left.(*PropertyAccess); ok {
-			if ident, ok := prop.Object.(*Identifier); ok {
+		switch left := e.Left.(type) {
+		case *PropertyAccess:
+			if ident, ok := left.Object.(*Identifier); ok {
 				cond.Variable = ident.Name
 			}
-			cond.Property = prop.Property
+			cond.Property = left.Property
+		case *FunctionCall:
+			// e.g. toUpper(p.name) = 'ALICE'
+			cond.FunctionName = strings.ToLower(left.Name)
+			if len(left.Arguments) > 0 {
+				switch arg := left.Arguments[0].(type) {
+				case *Identifier:
+					cond.Variable = arg.Name
+				case *PropertyAccess:
+					if ident, ok := arg.Object.(*Identifier); ok {
+						cond.Variable = ident.Name
+					}
+					cond.Property = arg.Property
+				}
+			}
 		}
 		cond.Value = extractExprValue(e.Right)
 		conditions = append(conditions, cond)
+
+	case *SimilarToExpression:
+		semanticConditions = append(semanticConditions, GraphSemanticCondition{
+			Variable:  e.Variable,
+			QueryText: e.Query,
+			Threshold: e.Threshold,
+		})
 	}
 
-	return conditions, nil
+	return conditions, semanticConditions, nil
 }
 
 func convertReturnToGraph(r *ReturnClause) *GraphReturnClause {
@@ -464,25 +546,46 @@ func convertReturnToGraph(r *ReturnClause) *GraphReturnClause {
 	for _, item := range r.Items {
 		gi := GraphReturnItem{}
 
-		// Check if it's a function call (aggregation)
+		// Check if it's a function call (aggregation or scalar)
 		if fc, ok := item.Expression.(*FunctionCall); ok {
-			gi.Aggregation = strings.ToUpper(fc.Name)
-			// Get the argument (e.g., COUNT(p) -> p)
-			if len(fc.Arguments) > 0 {
-				switch arg := fc.Arguments[0].(type) {
-				case *Identifier:
-					gi.Variable = arg.Name
-				case *PropertyAccess:
-					if ident, ok := arg.Object.(*Identifier); ok {
-						gi.Variable = ident.Name
+			upperName := strings.ToUpper(fc.Name)
+			isAggregation := map[string]bool{
+				"COUNT": true, "SUM": true, "AVG": true,
+				"MIN": true, "MAX": true, "COLLECT": true,
+			}[upperName]
+
+			if isAggregation {
+				gi.Aggregation = upperName
+				// Get the argument (e.g., COUNT(p) -> p)
+				if len(fc.Arguments) > 0 {
+					switch arg := fc.Arguments[0].(type) {
+					case *Identifier:
+						gi.Variable = arg.Name
+					case *PropertyAccess:
+						if ident, ok := arg.Object.(*Identifier); ok {
+							gi.Variable = ident.Name
+						}
+						gi.Property = arg.Property
+					case *Star:
+						gi.Variable = "*"
 					}
-					gi.Property = arg.Property
-				case *Star:
+				} else if upperName == "COUNT" {
 					gi.Variable = "*"
 				}
-			} else if gi.Aggregation == "COUNT" {
-				// COUNT() with no args is same as COUNT(*)
-				gi.Variable = "*"
+			} else {
+				// Non-aggregation scalar function: DURATION, toUpper, abs, etc.
+				gi.FunctionName = strings.ToLower(fc.Name)
+				if len(fc.Arguments) > 0 {
+					switch arg := fc.Arguments[0].(type) {
+					case *Identifier:
+						gi.Variable = arg.Name
+					case *PropertyAccess:
+						if ident, ok := arg.Object.(*Identifier); ok {
+							gi.Variable = ident.Name
+						}
+						gi.Property = arg.Property
+					}
+				}
 			}
 		} else {
 			switch e := item.Expression.(type) {
@@ -495,6 +598,9 @@ func convertReturnToGraph(r *ReturnClause) *GraphReturnClause {
 				gi.Property = e.Property
 			case *Star:
 				gi.Variable = "*"
+			case *CaseExpression, *IsNullExpression, *InExpression,
+				*BinaryExpression, *UnaryExpression, *FunctionCall:
+				gi.Expr = e
 			}
 		}
 
@@ -570,6 +676,16 @@ func convertEmbedToGraph(e *EmbedClause) *GraphEmbedClause {
 	}
 }
 
+func convertUnwindToGraph(u *UnwindClause) *GraphUnwindClause {
+	var list []interface{}
+	if lit, ok := u.Expression.(*ListLiteral); ok {
+		for _, elem := range lit.Elements {
+			list = append(list, extractExprValue(elem))
+		}
+	}
+	return &GraphUnwindClause{List: list, Variable: u.Variable}
+}
+
 func convertSimilarToGraph(s *SimilarToClause) *GraphSimilarToClause {
 	gs := &GraphSimilarToClause{}
 
@@ -640,6 +756,17 @@ func extractExprValue(expr Expression) interface{} {
 		return m
 	case *Identifier:
 		return e.Name
+	case *UnaryExpression:
+		if e.Operator == "-" {
+			inner := extractExprValue(e.Operand)
+			switch v := inner.(type) {
+			case int:
+				return -v
+			case float64:
+				return -v
+			}
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -653,4 +780,64 @@ func Validate(input string) error {
 		return fmt.Errorf("invalid query: %w", err)
 	}
 	return nil
+}
+
+// buildPipelineQuery converts a WITH-chained query into a GraphQuery with Pipeline set.
+// It walks clauses in order, grouping each MATCH+WHERE into a stage terminated by WITH.
+// The final RETURN is stored in Pipeline.FinalReturn and also in GraphQuery.ReturnClause
+// (so buildResult can be called directly with query.ReturnClause as usual).
+func buildPipelineQuery(ast *Query) (*GraphQuery, error) {
+	gq := &GraphQuery{QueryType: "PIPELINE"}
+	pipeline := &GraphPipeline{}
+
+	var currentStage GraphPipelineStage
+	stageHasMatch := false
+
+	for _, clause := range ast.Clauses {
+		switch c := clause.(type) {
+		case *MatchClause:
+			if stageHasMatch {
+				// Already have a match — this shouldn't happen before a WITH,
+				// but flush the current stage defensively.
+				pipeline.Stages = append(pipeline.Stages, currentStage)
+				currentStage = GraphPipelineStage{}
+			}
+			pattern, err := convertPatternToGraph(c.Pattern)
+			if err != nil {
+				return nil, err
+			}
+			currentStage.MatchPattern = pattern
+			stageHasMatch = true
+
+		case *WhereClause:
+			wc, err := convertWhereToGraph(c)
+			if err != nil {
+				return nil, err
+			}
+			currentStage.WhereClause = wc
+
+		case *WithClause:
+			// Extract projected variable names from WITH items
+			for _, item := range c.Items {
+				if ident, ok := item.Expression.(*Identifier); ok {
+					currentStage.WithVars = append(currentStage.WithVars, ident.Name)
+				}
+			}
+			pipeline.Stages = append(pipeline.Stages, currentStage)
+			currentStage = GraphPipelineStage{}
+			stageHasMatch = false
+
+		case *ReturnClause:
+			pipeline.FinalReturn = convertReturnToGraph(c)
+			gq.ReturnClause = pipeline.FinalReturn
+		}
+	}
+
+	// Flush any trailing stage (MATCH after the last WITH, before RETURN)
+	if stageHasMatch {
+		pipeline.Stages = append(pipeline.Stages, currentStage)
+	}
+
+	gq.Pipeline = pipeline
+	return gq, nil
 }

@@ -27,9 +27,16 @@ run: build
 server:
 	@cd server && go run .
 
-# Run all tests
+# Run all tests (Go unit tests + Bolt integration tests if server is running)
 test:
 	@go test -v ./graph/...
+	@echo ""
+	@echo "Running Bolt integration tests..."
+	@if lsof -i :7687 > /dev/null 2>&1; then \
+		cd test_bolt && bash -c '. venv/bin/activate && python3 test_connection.py'; \
+	else \
+		echo "  Server not running on :7687 — skipping Bolt tests. Run 'make server' first."; \
+	fi
 
 # Run the frontend dev server
 web-dev:
