@@ -30,7 +30,7 @@ jobs:
 
       - name: Build and start server
         run: |
-          cd server && go build -o ../gravecdb .
+          go build -o ./gravecdb ./server
           ./gravecdb &
           echo "SERVER_PID=$!" >> $GITHUB_ENV
           for i in $(seq 1 30); do
