@@ -33,7 +33,7 @@ test:
 	@echo ""
 	@echo "Running Bolt integration tests..."
 	@if lsof -i :7687 > /dev/null 2>&1; then \
-		cd test_bolt && bash -c '. venv/bin/activate && python3 test_connection.py'; \
+		cd test_bolt && bash -c '. venv/bin/activate && python3 test_connection.py && python3 test_transactions.py'; \
 	else \
 		echo "  Server not running on :7687 — skipping Bolt tests. Run 'make server' first."; \
 	fi

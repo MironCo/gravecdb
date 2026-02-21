@@ -48,8 +48,18 @@ func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*
 // executeUnwindQuery expands a list literal into rows and applies RETURN.
 func (g *DiskGraph) executeUnwindQuery(query *Query) (*QueryResult, error) {
 	uc := query.UnwindClause
+
+	// Resolve the list: either a pre-evaluated literal or a dynamic expression (e.g. range())
+	list := uc.List
+	if len(list) == 0 && uc.ListExpr != nil {
+		val := evalExpr(uc.ListExpr, Match{})
+		if l, ok := val.([]interface{}); ok {
+			list = l
+		}
+	}
+
 	var matches []Match
-	for _, item := range uc.List {
+	for _, item := range list {
 		matches = append(matches, Match{uc.Variable: item})
 	}
 	if query.WhereClause != nil {
@@ -1906,6 +1916,18 @@ func evaluateCondition(propVal interface{}, operator string, condVal interface{}
 		return compareValues(propVal, condVal) < 0
 	case "<=":
 		return compareValues(propVal, condVal) <= 0
+	case "STARTS WITH":
+		ps := fmt.Sprintf("%v", propVal)
+		cs := fmt.Sprintf("%v", condVal)
+		return strings.HasPrefix(ps, cs)
+	case "ENDS WITH":
+		ps := fmt.Sprintf("%v", propVal)
+		cs := fmt.Sprintf("%v", condVal)
+		return strings.HasSuffix(ps, cs)
+	case "CONTAINS":
+		ps := fmt.Sprintf("%v", propVal)
+		cs := fmt.Sprintf("%v", condVal)
+		return strings.Contains(ps, cs)
 	default:
 		return false
 	}
