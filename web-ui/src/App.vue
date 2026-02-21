@@ -757,7 +757,7 @@ html, body {
 }
 
 body {
-  font-family: 'Noto Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: var(--sans);
   background: var(--background);
   color: var(--on-surface);
   -webkit-font-smoothing: antialiased;
@@ -959,7 +959,7 @@ input[type="range"]::-moz-range-thumb {
   border: 1px solid var(--outline);
   padding: 6px 12px;
   border-radius: 4px;
-  font-family: 'Roboto', sans-serif;
+  font-family: var(--sans);
   font-weight: 500;
   font-size: 12px;
   cursor: pointer;
@@ -1013,7 +1013,7 @@ select {
   border: 1px solid var(--outline);
   padding: 8px 12px;
   border-radius: 4px;
-  font-family: 'Roboto', sans-serif;
+  font-family: var(--sans);
   font-size: 14px;
   cursor: pointer;
   transition: all 0.2s;
