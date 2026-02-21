@@ -141,6 +141,37 @@ func buildRowFromMatch(match Match, items []ReturnItem) map[string]interface{} {
 	return row
 }
 
+// evalRange generates an integer list from range(start, end[, step]).
+func evalRange(args []cypher.Expression, match Match) interface{} {
+	if len(args) < 2 {
+		return nil
+	}
+	startRaw := scalarToInteger(evalExpr(args[0], match))
+	endRaw := scalarToInteger(evalExpr(args[1], match))
+	start, ok1 := startRaw.(int)
+	end, ok2 := endRaw.(int)
+	if !ok1 || !ok2 {
+		return nil
+	}
+	step := 1
+	if len(args) >= 3 {
+		if s, ok := scalarToInteger(evalExpr(args[2], match)).(int); ok && s != 0 {
+			step = s
+		}
+	}
+	var result []interface{}
+	if step > 0 {
+		for i := start; i <= end; i += step {
+			result = append(result, i)
+		}
+	} else {
+		for i := start; i >= end; i += step {
+			result = append(result, i)
+		}
+	}
+	return result
+}
+
 // applyScalarFunction evaluates a scalar function against a value.
 // value may be a plain scalar (string, int, float64) or a *Node/*Relationship for DURATION.
 func applyScalarFunction(fn string, value interface{}) interface{} {
@@ -324,6 +355,70 @@ func applyScalarFunction(fn string, value interface{}) interface{} {
 			return nil
 		}
 		return math.Exp(f)
+
+	// ── introspection ─────────────────────────────────────────────────────────
+	case "labels":
+		if node, ok := value.(*Node); ok {
+			result := make([]interface{}, len(node.Labels))
+			for i, l := range node.Labels {
+				result[i] = l
+			}
+			return result
+		}
+		return nil
+
+	case "type":
+		if rel, ok := value.(*Relationship); ok {
+			return rel.Type
+		}
+		return nil
+
+	case "keys":
+		var keys []string
+		switch v := value.(type) {
+		case *Node:
+			for k := range v.Properties {
+				keys = append(keys, k)
+			}
+		case *Relationship:
+			for k := range v.Properties {
+				keys = append(keys, k)
+			}
+		default:
+			return nil
+		}
+		sort.Strings(keys)
+		result := make([]interface{}, len(keys))
+		for i, k := range keys {
+			result[i] = k
+		}
+		return result
+
+	case "id", "elementid":
+		switch v := value.(type) {
+		case *Node:
+			return v.ID
+		case *Relationship:
+			return v.ID
+		}
+		return nil
+
+	case "properties":
+		switch v := value.(type) {
+		case *Node:
+			result := make(map[string]interface{}, len(v.Properties))
+			for k, val := range v.Properties {
+				result[k] = val
+			}
+			return result
+		case *Relationship:
+			result := make(map[string]interface{}, len(v.Properties))
+			for k, val := range v.Properties {
+				result[k] = val
+			}
+			return result
+		}
+		return nil
 	}
 	return nil
 }
@@ -506,6 +601,27 @@ func computeAggregation(matches []Match, item ReturnItem) interface{} {
 	case "COUNT":
 		if item.Variable == "*" {
 			return len(matches)
+		}
+		if item.Distinct {
+			seen := make(map[string]bool)
+			for _, m := range matches {
+				entity, ok := m[item.Variable]
+				if !ok {
+					continue
+				}
+				var val interface{}
+				if item.Property != "" {
+					if node, ok := entity.(*Node); ok {
+						val = node.Properties[item.Property]
+					} else if rel, ok := entity.(*Relationship); ok {
+						val = rel.Properties[item.Property]
+					}
+				} else {
+					val = entity
+				}
+				seen[fmt.Sprintf("%v", val)] = true
+			}
+			return len(seen)
 		}
 		count := 0
 		for _, m := range matches {
@@ -752,11 +868,25 @@ func evalExpr(expr cypher.Expression, match Match) interface{} {
 		right := evalExpr(e.Right, match)
 		return evalBinaryOp(left, e.Operator, right)
 	case *cypher.FunctionCall:
-		var arg interface{}
-		if len(e.Arguments) > 0 {
-			arg = evalExpr(e.Arguments[0], match)
+		name := strings.ToLower(e.Name)
+		switch name {
+		case "coalesce":
+			for _, argExpr := range e.Arguments {
+				val := evalExpr(argExpr, match)
+				if val != nil {
+					return val
+				}
+			}
+			return nil
+		case "range":
+			return evalRange(e.Arguments, match)
+		default:
+			var arg interface{}
+			if len(e.Arguments) > 0 {
+				arg = evalExpr(e.Arguments[0], match)
+			}
+			return applyScalarFunction(name, arg)
 		}
-		return applyScalarFunction(strings.ToLower(e.Name), arg)
 	case *cypher.CaseExpression:
 		return evalCaseExpr(e, match)
 	case *cypher.IsNullExpression:

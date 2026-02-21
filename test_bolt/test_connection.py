@@ -431,6 +431,107 @@ def main():
             print(f"  a={r['a']!r}  b={r['b']!r}")
         print("  PASS")
 
+        # Test 31: labels(n) introspection
+        print("\n[Test 31] labels(n) — node label introspection")
+        print("-" * 40)
+        result = session.run("MATCH (p:Person) RETURN labels(p) AS lbls LIMIT 1")
+        rows = list(result)
+        assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+        lbls = rows[0]["lbls"]
+        assert "Person" in lbls, f"Expected 'Person' in labels, got {lbls}"
+        print(f"  labels(p) = {lbls}")
+        print("  PASS")
+
+        # Test 32: type(r) — relationship type introspection
+        print("\n[Test 32] type(r) — relationship type introspection")
+        print("-" * 40)
+        result = session.run(
+            "MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN type(r) AS t LIMIT 1"
+        )
+        rows = list(result)
+        if len(rows) == 0:
+            print("  SKIP (no KNOWS relationships in dataset)")
+        else:
+            t = rows[0]["t"]
+            assert t == "KNOWS", f"Expected 'KNOWS', got {t!r}"
+            print(f"  type(r) = {t!r}")
+            print("  PASS")
+
+        # Test 33: keys(n) — property key introspection
+        print("\n[Test 33] keys(n) — property key introspection")
+        print("-" * 40)
+        session.run("MERGE (k:KeyTest {alpha: 1, beta: 2, gamma: 3})").consume()
+        result = session.run("MATCH (k:KeyTest) RETURN keys(k) AS ks LIMIT 1")
+        rows = list(result)
+        assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+        ks = sorted(rows[0]["ks"])
+        assert "alpha" in ks and "beta" in ks and "gamma" in ks, f"Missing keys: {ks}"
+        print(f"  keys(k) = {ks}")
+        print("  PASS")
+
+        # Test 34: coalesce() — first non-null
+        print("\n[Test 34] coalesce() — first non-null value")
+        print("-" * 40)
+        result = session.run(
+            "MATCH (n:ScoreTest) RETURN n.id AS id, coalesce(n.score, 0) AS score ORDER BY n.id"
+        )
+        rows = list(result)
+        assert len(rows) >= 2, f"Expected >=2 ScoreTest nodes, got {len(rows)}"
+        by_id = {r["id"]: r["score"] for r in rows}
+        assert by_id["a"] == 42, f"Node 'a' has score 42, coalesce should return 42, got {by_id['a']}"
+        assert by_id["b"] == 0,  f"Node 'b' has no score, coalesce should return 0, got {by_id['b']}"
+        print(f"  coalesce results: {by_id}")
+        print("  PASS")
+
+        # Test 35: range() — generate integer list
+        print("\n[Test 35] range() — integer list generation")
+        print("-" * 40)
+        result = session.run("UNWIND range(1, 5) AS x RETURN x")
+        rows = list(result)
+        vals = [r["x"] for r in rows]
+        assert vals == [1, 2, 3, 4, 5], f"Expected [1..5], got {vals}"
+        print(f"  range(1,5) = {vals}")
+        result = session.run("UNWIND range(0, 10, 2) AS x RETURN x")
+        rows = list(result)
+        vals = [r["x"] for r in rows]
+        assert vals == [0, 2, 4, 6, 8, 10], f"Expected [0,2,4,6,8,10], got {vals}"
+        print(f"  range(0,10,2) = {vals}")
+        print("  PASS")
+
+        # Test 36: COUNT(DISTINCT x)
+        print("\n[Test 36] COUNT(DISTINCT x)")
+        print("-" * 40)
+        session.run("MERGE (d:DistinctTest {city: 'NYC', name: 'Alice'})").consume()
+        session.run("MERGE (d:DistinctTest {city: 'NYC', name: 'Bob'})").consume()
+        session.run("MERGE (d:DistinctTest {city: 'LA',  name: 'Carol'})").consume()
+        result = session.run(
+            "MATCH (d:DistinctTest) RETURN COUNT(d) AS total, COUNT(DISTINCT d.city) AS cities"
+        )
+        rows = list(result)
+        assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+        total  = rows[0]["total"]
+        cities = rows[0]["cities"]
+        assert total == 3,  f"Expected total=3, got {total}"
+        assert cities == 2, f"Expected cities=2 (NYC,LA), got {cities}"
+        print(f"  COUNT(d)={total}, COUNT(DISTINCT d.city)={cities}")
+        print("  PASS")
+
+        # Test 37: Multiple MATCH clauses without WITH
+        print("\n[Test 37] Multiple MATCH clauses without WITH")
+        print("-" * 40)
+        result = session.run(
+            "MATCH (a:CartA) "
+            "MATCH (b:CartB) "
+            "RETURN a.name AS a, b.name AS b ORDER BY a, b"
+        )
+        rows = list(result)
+        pairs = [(r["a"], r["b"]) for r in rows]
+        assert len(rows) == 2, f"Expected 2 rows (2 CartA × 1 CartB), got {len(rows)}: {pairs}"
+        assert ("A1", "B1") in pairs and ("A2", "B1") in pairs, f"Wrong pairs: {pairs}"
+        for r in rows:
+            print(f"  a={r['a']!r}  b={r['b']!r}")
+        print("  PASS")
+
     driver.close()
     print("\n" + "=" * 50)
     print("All tests completed!")

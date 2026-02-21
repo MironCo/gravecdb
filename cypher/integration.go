@@ -146,6 +146,7 @@ type GraphReturnItem struct {
 	Variable     string
 	Property     string
 	Aggregation  string     // COUNT, SUM, AVG, MIN, MAX, COLLECT
+	Distinct     bool       // true for COUNT(DISTINCT x)
 	FunctionName string     // non-aggregation function: "duration", "toupper", etc.
 	Alias        string
 	Expr         Expression // non-nil for CASE WHEN and other complex expressions
@@ -171,6 +172,7 @@ type GraphEmbedClause struct {
 
 type GraphUnwindClause struct {
 	List     []interface{}
+	ListExpr Expression // non-nil when List comes from a dynamic expression (e.g. range())
 	Variable string
 }
 
@@ -185,11 +187,18 @@ type GraphSimilarToClause struct {
 
 // ConvertToGraphQuery converts the AST to graph-compatible query
 func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
-	// If the query contains a WITH clause, build a multi-stage pipeline instead
+	// Route to pipeline executor when WITH is present OR multiple MATCH clauses exist
+	matchCount := 0
 	for _, clause := range ast.Clauses {
-		if _, ok := clause.(*WithClause); ok {
+		switch clause.(type) {
+		case *WithClause:
 			return buildPipelineQuery(ast)
+		case *MatchClause:
+			matchCount++
 		}
+	}
+	if matchCount > 1 {
+		return buildPipelineQuery(ast)
 	}
 
 	gq := &GraphQuery{}
@@ -556,6 +565,7 @@ func convertReturnToGraph(r *ReturnClause) *GraphReturnClause {
 
 			if isAggregation {
 				gi.Aggregation = upperName
+				gi.Distinct = fc.Distinct
 				// Get the argument (e.g., COUNT(p) -> p)
 				if len(fc.Arguments) > 0 {
 					switch arg := fc.Arguments[0].(type) {
@@ -573,8 +583,11 @@ func convertReturnToGraph(r *ReturnClause) *GraphReturnClause {
 					gi.Variable = "*"
 				}
 			} else {
-				// Non-aggregation scalar function: DURATION, toUpper, abs, etc.
+				// Non-aggregation scalar function: DURATION, toUpper, abs, coalesce, etc.
+				// Store the full FunctionCall as Expr so evalExpr handles multi-arg functions.
+				// Also populate FunctionName/Variable/Property for getColumnName formatting.
 				gi.FunctionName = strings.ToLower(fc.Name)
+				gi.Expr = fc
 				if len(fc.Arguments) > 0 {
 					switch arg := fc.Arguments[0].(type) {
 					case *Identifier:
@@ -677,13 +690,15 @@ func convertEmbedToGraph(e *EmbedClause) *GraphEmbedClause {
 }
 
 func convertUnwindToGraph(u *UnwindClause) *GraphUnwindClause {
-	var list []interface{}
 	if lit, ok := u.Expression.(*ListLiteral); ok {
+		var list []interface{}
 		for _, elem := range lit.Elements {
 			list = append(list, extractExprValue(elem))
 		}
+		return &GraphUnwindClause{List: list, Variable: u.Variable}
 	}
-	return &GraphUnwindClause{List: list, Variable: u.Variable}
+	// Dynamic expression (e.g. range(1, 5)) — store for evaluation at execution time
+	return &GraphUnwindClause{ListExpr: u.Expression, Variable: u.Variable}
 }
 
 func convertSimilarToGraph(s *SimilarToClause) *GraphSimilarToClause {
