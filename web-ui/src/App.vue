@@ -2,6 +2,8 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import cytoscape from 'cytoscape'
 
+const API_BASE = import.meta.env.VITE_API_URL || ''
+
 const graphData = ref({ nodes: [], relationships: [] })
 const timelineEvents = ref([])
 const currentTimeIndex = ref(0)
@@ -79,7 +81,7 @@ onMounted(async () => {
 })
 
 async function loadTimeline() {
-  const res = await fetch('/api/timeline')
+  const res = await fetch(`${API_BASE}/api/timeline`)
   timelineEvents.value = await res.json()
   timelineEvents.value.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
   currentTimeIndex.value = timelineEvents.value.length - 1
@@ -93,14 +95,14 @@ async function loadGraph() {
   }
 
   if (currentTimeIndex.value === timelineEvents.value.length - 1) {
-    const res = await fetch('/api/graph')
+    const res = await fetch(`${API_BASE}/api/graph`)
     graphData.value = await res.json()
   } else {
     const event = timelineEvents.value[currentTimeIndex.value]
     if (!event) return
 
     const timestamp = encodeURIComponent(new Date(event.timestamp).toISOString())
-    const res = await fetch(`/api/graph/asof?t=${timestamp}`)
+    const res = await fetch(`${API_BASE}/api/graph/asof?t=${timestamp}`)
     graphData.value = await res.json()
   }
 
@@ -346,7 +348,7 @@ async function executeQuery() {
   queryResult.value = null
 
   try {
-    const res = await fetch('/api/query', {
+    const res = await fetch(`${API_BASE}/api/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query: queryText.value })

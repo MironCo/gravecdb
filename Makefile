@@ -1,4 +1,4 @@
-.PHONY: build build-linux build-all run server test demo-basic demo-temporal demo-persistence demo-pathfinding demo-query demo-temporal-paths demo-embeddings demo-client demo-performance web-dev web-build docker docker-run compose-up compose-down clean
+.PHONY: build build-linux build-all run server dev test demo-basic demo-temporal demo-persistence demo-pathfinding demo-query demo-temporal-paths demo-embeddings demo-client demo-performance web-dev web-build docker docker-run compose-up compose-down clean
 
 # Build the server binary for current platform
 build:
@@ -38,14 +38,19 @@ test:
 		echo "  Server not running on :7687 — skipping Bolt tests. Run 'make server' first."; \
 	fi
 
-# Run the frontend dev server
+# Run backend + frontend dev servers together
+dev:
+	@cd server && go run . & \
+	cd web-ui && npm run dev
+
+# Run the frontend dev server (uses local web-ui/)
 web-dev:
 	@cd web-ui && npm run dev
 
-# Build the frontend for production
+# Build the frontend for production (uses local web-ui/)
 web-build:
 	@cd web-ui && npm run build
-	@echo "Built frontend to web/dist"
+	@echo "Built frontend to web-ui/dist"
 
 # Run the basic demo
 demo-basic:
@@ -106,5 +111,5 @@ compose-down:
 
 # Clean build artifacts
 clean:
-	@rm -rf data/ gravecdb web/dist examples/*/data*
+	@rm -rf data/ gravecdb examples/*/data*
 	@echo "Cleaned up data directory and binaries"
