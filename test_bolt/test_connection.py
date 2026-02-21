@@ -360,6 +360,77 @@ def main():
         print(f"  IS NOT NULL ids: {not_null_ids}")
         print("  PASS")
 
+        # Test 26: STARTS WITH in WHERE
+        print("\n[Test 26] STARTS WITH in WHERE")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND ['Apple', 'Banana', 'Avocado', 'Cherry'] AS fruit WHERE fruit STARTS WITH 'A' RETURN fruit"
+        )
+        rows = list(result)
+        vals = sorted([r["fruit"] for r in rows])
+        assert vals == ["Apple", "Avocado"], f"Expected ['Apple','Avocado'], got {vals}"
+        print(f"  STARTS WITH 'A': {vals}")
+        print("  PASS")
+
+        # Test 27: ENDS WITH in WHERE
+        print("\n[Test 27] ENDS WITH in WHERE")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND ['hello', 'world', 'jello', 'mellow'] AS w WHERE w ENDS WITH 'llo' RETURN w"
+        )
+        rows = list(result)
+        vals = sorted([r["w"] for r in rows])
+        assert vals == ["hello", "jello"], f"Expected ['hello','jello'], got {vals}"
+        print(f"  ENDS WITH 'llo': {vals}")
+        print("  PASS")
+
+        # Test 28: CONTAINS in WHERE
+        print("\n[Test 28] CONTAINS in WHERE")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND ['graph', 'database', 'graphic', 'data'] AS w WHERE w CONTAINS 'raph' RETURN w"
+        )
+        rows = list(result)
+        vals = sorted([r["w"] for r in rows])
+        assert vals == ["graph", "graphic"], f"Expected ['graph','graphic'], got {vals}"
+        print(f"  CONTAINS 'raph': {vals}")
+        print("  PASS")
+
+        # Test 29: String concatenation in RETURN
+        print("\n[Test 29] String concatenation (p.first + ' ' + p.last)")
+        print("-" * 40)
+        session.run("MERGE (p:ConcatTest {first: 'John', last: 'Doe'})").consume()
+        session.run("MERGE (p:ConcatTest {first: 'Jane', last: 'Smith'})").consume()
+        result = session.run(
+            "MATCH (p:ConcatTest) RETURN p.first + ' ' + p.last AS full_name ORDER BY full_name"
+        )
+        rows = list(result)
+        assert len(rows) >= 2, f"Expected at least 2 rows, got {len(rows)}"
+        names = [r["full_name"] for r in rows]
+        assert "John Doe" in names, f"Expected 'John Doe' in {names}"
+        assert "Jane Smith" in names, f"Expected 'Jane Smith' in {names}"
+        for r in rows:
+            print(f"  full_name={r['full_name']!r}")
+        print("  PASS")
+
+        # Test 30: Multi-pattern MATCH (cartesian product)
+        print("\n[Test 30] Multi-pattern MATCH — cartesian product")
+        print("-" * 40)
+        session.run("MERGE (a:CartA {name: 'A1'})").consume()
+        session.run("MERGE (a:CartA {name: 'A2'})").consume()
+        session.run("MERGE (b:CartB {name: 'B1'})").consume()
+        result = session.run(
+            "MATCH (a:CartA), (b:CartB) RETURN a.name AS a, b.name AS b ORDER BY a, b"
+        )
+        rows = list(result)
+        pairs = [(r["a"], r["b"]) for r in rows]
+        assert len(rows) == 2, f"Expected 2 rows (2 CartA × 1 CartB), got {len(rows)}: {pairs}"
+        assert ("A1", "B1") in pairs, f"Expected ('A1','B1') in {pairs}"
+        assert ("A2", "B1") in pairs, f"Expected ('A2','B1') in {pairs}"
+        for r in rows:
+            print(f"  a={r['a']!r}  b={r['b']!r}")
+        print("  PASS")
+
     driver.close()
     print("\n" + "=" * 50)
     print("All tests completed!")

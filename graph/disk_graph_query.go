@@ -1906,6 +1906,18 @@ func evaluateCondition(propVal interface{}, operator string, condVal interface{}
 		return compareValues(propVal, condVal) < 0
 	case "<=":
 		return compareValues(propVal, condVal) <= 0
+	case "STARTS WITH":
+		ps := fmt.Sprintf("%v", propVal)
+		cs := fmt.Sprintf("%v", condVal)
+		return strings.HasPrefix(ps, cs)
+	case "ENDS WITH":
+		ps := fmt.Sprintf("%v", propVal)
+		cs := fmt.Sprintf("%v", condVal)
+		return strings.HasSuffix(ps, cs)
+	case "CONTAINS":
+		ps := fmt.Sprintf("%v", propVal)
+		cs := fmt.Sprintf("%v", condVal)
+		return strings.Contains(ps, cs)
 	default:
 		return false
 	}

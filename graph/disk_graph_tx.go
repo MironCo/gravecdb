@@ -744,19 +744,29 @@ func (t *DiskGraphTransaction) Commit() error {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	// Update in-memory indexes for created nodes
+	// Update in-memory indexes for created nodes.
+	// Read the final version from disk so the cache has all properties that
+	// were set via SetNodeProperty during the transaction.
 	for _, node := range t.createdNodes {
 		for _, label := range node.Labels {
 			t.g.labelIndex[label] = append(t.g.labelIndex[label], node.ID)
 		}
-		t.g.nodeCache.Add(node.ID, node)
+		if finalNode, err := t.g.boltStore.GetNode(node.ID); err == nil && finalNode != nil {
+			t.g.nodeCache.Add(node.ID, finalNode)
+		} else {
+			t.g.nodeCache.Add(node.ID, node)
+		}
 	}
 
-	// Update in-memory indexes for created relationships
+	// Update in-memory indexes for created relationships.
 	for _, rel := range t.createdRels {
 		t.g.nodeRelIndex[rel.FromNodeID] = append(t.g.nodeRelIndex[rel.FromNodeID], rel.ID)
 		t.g.nodeRelIndex[rel.ToNodeID] = append(t.g.nodeRelIndex[rel.ToNodeID], rel.ID)
-		t.g.relCache.Add(rel.ID, rel)
+		if finalRel, err := t.g.boltStore.GetRelationship(rel.ID); err == nil && finalRel != nil {
+			t.g.relCache.Add(rel.ID, finalRel)
+		} else {
+			t.g.relCache.Add(rel.ID, rel)
+		}
 	}
 
 	// Update indexes for deleted nodes
