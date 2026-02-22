@@ -11,7 +11,7 @@ import (
 
 // Config holds configuration for creating a graph database connection
 type Config struct {
-	// Data directory for persistence (empty = in-memory only)
+	// Data directory for persistence
 	DataDir string
 
 	// Authentication
@@ -23,11 +23,6 @@ type Config struct {
 
 	// Storage backend ("bolt" or "wal", defaults to "bolt")
 	StorageBackend string
-
-	// Storage mode ("memory" or "disk", defaults to "memory")
-	// - memory: Load all data into RAM (fast queries, RAM-limited)
-	// - disk: Query disk directly with LRU cache (slower, unlimited size)
-	StorageMode string
 }
 
 // ParseDSN parses a connection string into a Config
@@ -39,7 +34,6 @@ type Config struct {
 //	gravecdb:///data                               (persist to ./data, no auth)
 //	gravecdb://admin:secret@/data                  (persist to ./data, with auth)
 //	gravecdb://admin:secret@/data?embedder=ollama://localhost:11434
-//	gravecdb://:memory:                            (explicit in-memory)
 //
 // Environment variables:
 //
@@ -62,10 +56,6 @@ func ParseDSN(dsn string) (*Config, error) {
 
 	rest := strings.TrimPrefix(dsn, "gravecdb://")
 
-	// Check for explicit in-memory
-	if rest == ":memory:" {
-		return cfg, nil
-	}
 
 	// Parse credentials if present (username:password@)
 	if strings.Contains(rest, "@") {
@@ -97,8 +87,6 @@ func ParseDSN(dsn string) (*Config, error) {
 					cfg.EmbedderURL = kv[1]
 				case "backend", "storage":
 					cfg.StorageBackend = kv[1]
-				case "mode":
-					cfg.StorageMode = kv[1]
 				}
 			}
 		}

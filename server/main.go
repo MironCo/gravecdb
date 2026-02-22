@@ -96,10 +96,6 @@ func main() {
 		})
 	}
 
-	// Serve static files (frontend)
-	r.Static("/static", "./web/dist")
-	r.StaticFile("/", "./web/index.html")
-
 	// API routes
 	api := r.Group("/api")
 	{
