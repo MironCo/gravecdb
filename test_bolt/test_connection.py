@@ -658,6 +658,169 @@ def main():
         print(f"  Reachable from VLP_A: {names}")
         print("  PASS")
 
+        # Test 44: substring()
+        print("\n[Test 44] substring(str, start, length)")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND ['hello world'] AS s "
+            "RETURN substring(s, 0, 5) AS a, substring(s, 6) AS b"
+        )
+        rows = list(result)
+        assert rows[0]["a"] == "hello", f"substring(s,0,5) should be 'hello', got {rows[0]['a']!r}"
+        assert rows[0]["b"] == "world", f"substring(s,6) should be 'world', got {rows[0]['b']!r}"
+        print(f"  substring('hello world', 0, 5) = {rows[0]['a']!r}")
+        print(f"  substring('hello world', 6) = {rows[0]['b']!r}")
+        print("  PASS")
+
+        # Test 45: replace()
+        print("\n[Test 45] replace(str, search, replacement)")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND ['hello world'] AS s "
+            "RETURN replace(s, 'world', 'cypher') AS val"
+        )
+        rows = list(result)
+        assert rows[0]["val"] == "hello cypher", f"Expected 'hello cypher', got {rows[0]['val']!r}"
+        print(f"  replace('hello world', 'world', 'cypher') = {rows[0]['val']!r}")
+        print("  PASS")
+
+        # Test 46: split()
+        print("\n[Test 46] split(str, delimiter)")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND ['a,b,c'] AS s "
+            "RETURN split(s, ',') AS val"
+        )
+        rows = list(result)
+        assert rows[0]["val"] == ["a", "b", "c"], f"Expected ['a','b','c'], got {rows[0]['val']!r}"
+        print(f"  split('a,b,c', ',') = {rows[0]['val']!r}")
+        print("  PASS")
+
+        # Test 47: left() and right()
+        print("\n[Test 47] left(str, n) and right(str, n)")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND ['hello'] AS s "
+            "RETURN left(s, 3) AS l, right(s, 3) AS r"
+        )
+        rows = list(result)
+        assert rows[0]["l"] == "hel", f"left('hello',3) should be 'hel', got {rows[0]['l']!r}"
+        assert rows[0]["r"] == "llo", f"right('hello',3) should be 'llo', got {rows[0]['r']!r}"
+        print(f"  left('hello', 3) = {rows[0]['l']!r}")
+        print(f"  right('hello', 3) = {rows[0]['r']!r}")
+        print("  PASS")
+
+        # Test 48: Math functions — sin, cos, pi, rand, pow
+        print("\n[Test 48] Math functions: sin, cos, pi, rand, pow")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND [1] AS x "
+            "RETURN pi() AS pi, rand() AS rnd, pow(2, 10) AS p, "
+            "round(sin(0) * 100) AS s, round(cos(0) * 100) AS c"
+        )
+        rows = list(result)
+        import math
+        assert abs(rows[0]["pi"] - math.pi) < 0.0001, f"pi() wrong: {rows[0]['pi']}"
+        assert 0 <= rows[0]["rnd"] <= 1, f"rand() out of range: {rows[0]['rnd']}"
+        assert rows[0]["p"] == 1024.0, f"pow(2,10) should be 1024, got {rows[0]['p']}"
+        assert rows[0]["s"] == 0, f"sin(0) should be 0, got {rows[0]['s']}"
+        assert rows[0]["c"] == 100, f"cos(0) should be 100 (round(1*100)), got {rows[0]['c']}"
+        print(f"  pi() = {rows[0]['pi']}")
+        print(f"  rand() = {rows[0]['rnd']}")
+        print(f"  pow(2, 10) = {rows[0]['p']}")
+        print(f"  round(sin(0)*100) = {rows[0]['s']}")
+        print(f"  round(cos(0)*100) = {rows[0]['c']}")
+        print("  PASS")
+
+        # Test 49: startNode / endNode
+        print("\n[Test 49] startNode(r) and endNode(r)")
+        print("-" * 40)
+        result = session.run(
+            "MATCH (a:VLPTest {name: 'VLP_A'})-[r:KNOWS]->(b:VLPTest {name: 'VLP_B'}) "
+            "RETURN startNode(r) AS sn, endNode(r) AS en"
+        )
+        rows = list(result)
+        if len(rows) == 0:
+            print("  SKIP (no VLP data)")
+        else:
+            assert rows[0]["sn"] is not None, f"startNode returned None"
+            assert rows[0]["en"] is not None, f"endNode returned None"
+            print(f"  startNode(r) = {rows[0]['sn']!r}")
+            print(f"  endNode(r) = {rows[0]['en']!r}")
+            print("  PASS")
+
+        # Test 50: EXISTS(n.property)
+        print("\n[Test 50] EXISTS(n.property)")
+        print("-" * 40)
+        session.run("MATCH (e:ExistsTest) DETACH DELETE e").consume()
+        session.run("CREATE (e:ExistsTest {name: 'has_email', email: 'test@test.com'})").consume()
+        session.run("CREATE (e:ExistsTest {name: 'no_email'})").consume()
+        result = session.run(
+            "MATCH (e:ExistsTest) WHERE EXISTS(e.email) RETURN e.name AS name"
+        )
+        rows = list(result)
+        names = [r["name"] for r in rows]
+        assert names == ["has_email"], f"Expected ['has_email'], got {names}"
+        print(f"  Nodes with email: {names}")
+        print("  PASS")
+
+        # Test 51: ANY(x IN list WHERE condition)
+        print("\n[Test 51] ANY(x IN list WHERE condition)")
+        print("-" * 40)
+        session.run("MATCH (lt:ListTest) DETACH DELETE lt").consume()
+        session.run("CREATE (lt:ListTest {id: 'a', tags: ['go', 'rust', 'python']})").consume()
+        session.run("CREATE (lt:ListTest {id: 'b', tags: ['java', 'kotlin']})").consume()
+        session.run("CREATE (lt:ListTest {id: 'c', tags: ['go', 'typescript']})").consume()
+        result = session.run(
+            "MATCH (lt:ListTest) WHERE ANY(t IN lt.tags WHERE t = 'go') "
+            "RETURN lt.id AS id ORDER BY id"
+        )
+        rows = list(result)
+        ids = [r["id"] for r in rows]
+        assert ids == ["a", "c"], f"Expected ['a', 'c'], got {ids}"
+        print(f"  Nodes with ANY tag = 'go': {ids}")
+        print("  PASS")
+
+        # Test 52: ALL(x IN list WHERE condition)
+        print("\n[Test 52] ALL(x IN list WHERE condition)")
+        print("-" * 40)
+        result = session.run(
+            "MATCH (lt:ListTest) WHERE ALL(t IN lt.tags WHERE size(t) > 1) "
+            "RETURN lt.id AS id ORDER BY id"
+        )
+        rows = list(result)
+        ids = [r["id"] for r in rows]
+        assert ids == ["a", "b", "c"], f"Expected all 3 (all tags > 1 char), got {ids}"
+        print(f"  Nodes where ALL tags have size > 1: {ids}")
+        print("  PASS")
+
+        # Test 53: NONE(x IN list WHERE condition)
+        print("\n[Test 53] NONE(x IN list WHERE condition)")
+        print("-" * 40)
+        result = session.run(
+            "MATCH (lt:ListTest) WHERE NONE(t IN lt.tags WHERE t = 'java') "
+            "RETURN lt.id AS id ORDER BY id"
+        )
+        rows = list(result)
+        ids = [r["id"] for r in rows]
+        assert ids == ["a", "c"], f"Expected ['a', 'c'] (no java), got {ids}"
+        print(f"  Nodes with NONE tag = 'java': {ids}")
+        print("  PASS")
+
+        # Test 54: SINGLE(x IN list WHERE condition)
+        print("\n[Test 54] SINGLE(x IN list WHERE condition)")
+        print("-" * 40)
+        result = session.run(
+            "MATCH (lt:ListTest) WHERE SINGLE(t IN lt.tags WHERE t = 'go') "
+            "RETURN lt.id AS id ORDER BY id"
+        )
+        rows = list(result)
+        ids = [r["id"] for r in rows]
+        # Both 'a' and 'c' have exactly one 'go' tag
+        assert ids == ["a", "c"], f"Expected ['a', 'c'] (exactly one 'go'), got {ids}"
+        print(f"  Nodes with SINGLE tag = 'go': {ids}")
+        print("  PASS")
+
     driver.close()
     print("\n" + "=" * 50)
     print("All tests completed!")

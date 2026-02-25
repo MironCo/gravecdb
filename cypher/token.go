@@ -118,6 +118,9 @@ const (
 	TOKEN_DROP
 	TOKEN_EXPLAIN
 	TOKEN_PROFILE
+	TOKEN_ANY
+	TOKEN_NONE
+	TOKEN_SINGLE
 
 	// Path functions
 	TOKEN_SHORTESTPATH
@@ -214,6 +217,9 @@ var keywords = map[string]TokenType{
 	"DROP":             TOKEN_DROP,
 	"EXPLAIN":          TOKEN_EXPLAIN,
 	"PROFILE":          TOKEN_PROFILE,
+	"ANY":              TOKEN_ANY,
+	"NONE":             TOKEN_NONE,
+	"SINGLE":           TOKEN_SINGLE,
 	"TRUE":             TOKEN_TRUE,
 	"FALSE":            TOKEN_FALSE,
 	"NULL":             TOKEN_NULL,

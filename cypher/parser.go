@@ -834,6 +834,10 @@ func (p *Parser) parseExpression(precedence int) Expression {
 		left = p.parseCaseExpression()
 	case TOKEN_COUNT, TOKEN_SUM, TOKEN_AVG, TOKEN_MIN, TOKEN_MAX, TOKEN_COLLECT:
 		left = p.parseAggregateFunction()
+	case TOKEN_EXISTS:
+		left = p.parseExistsFunction()
+	case TOKEN_ANY, TOKEN_ALL, TOKEN_NONE, TOKEN_SINGLE:
+		left = p.parseListPredicate()
 	default:
 		// Treat keyword tokens as identifiers when used as variable/alias names
 		// (e.g., ORDER BY from, RETURN x AS to)
@@ -1197,6 +1201,69 @@ func (p *Parser) parseFunctionCallWithName(name string) Expression {
 
 func (p *Parser) parseAggregateFunction() Expression {
 	return p.parseFunctionCall()
+}
+
+// parseExistsFunction parses EXISTS(expr) as a function call
+func (p *Parser) parseExistsFunction() Expression {
+	name := p.curToken.Literal // "EXISTS"
+	p.nextToken()              // consume EXISTS
+	if !p.curTokenIs(TOKEN_LPAREN) {
+		// Not a function call — treat as identifier
+		return &Identifier{Name: name}
+	}
+	return p.parseFunctionCallWithName(name)
+}
+
+// parseListPredicate parses ANY/ALL/NONE/SINGLE(variable IN list WHERE condition)
+func (p *Parser) parseListPredicate() Expression {
+	funcName := p.curToken.Literal // ANY, ALL, NONE, SINGLE
+	p.nextToken()                  // consume function name
+
+	if !p.curTokenIs(TOKEN_LPAREN) {
+		return &Identifier{Name: funcName}
+	}
+	p.nextToken() // consume (
+
+	expr := &ListPredicateExpression{Function: funcName}
+
+	// Parse variable name
+	if p.curToken.Literal == "" || p.curTokenIs(TOKEN_EOF) {
+		p.addError("expected variable in %s()", funcName)
+		return nil
+	}
+	expr.Variable = p.curToken.Literal
+	p.nextToken()
+
+	// Expect IN
+	if !p.curTokenIs(TOKEN_IN) {
+		p.addError("expected IN after variable in %s()", funcName)
+		return nil
+	}
+	p.nextToken() // consume IN
+
+	// Parse list expression
+	expr.List = p.parseExpression(LOWEST)
+
+	// Expect WHERE or |
+	if p.curTokenIs(TOKEN_WHERE) {
+		p.nextToken() // consume WHERE
+	} else if p.curTokenIs(TOKEN_PIPE) {
+		p.nextToken() // consume |
+	} else {
+		p.addError("expected WHERE or | in %s()", funcName)
+		return nil
+	}
+
+	// Parse condition
+	expr.Condition = p.parseExpression(LOWEST)
+
+	if !p.curTokenIs(TOKEN_RPAREN) {
+		p.addError("expected ) to close %s()", funcName)
+		return nil
+	}
+	p.nextToken() // consume )
+
+	return expr
 }
 
 func (p *Parser) parseCaseExpression() Expression {

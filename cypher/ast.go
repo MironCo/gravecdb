@@ -461,6 +461,17 @@ type ExistsExpression struct {
 func (e *ExistsExpression) node()       {}
 func (e *ExistsExpression) expression() {}
 
+// ListPredicateExpression represents ANY/ALL/NONE/SINGLE(variable IN list WHERE condition)
+type ListPredicateExpression struct {
+	Function  string     // "ANY", "ALL", "NONE", "SINGLE"
+	Variable  string     // iteration variable
+	List      Expression // the list to iterate
+	Condition Expression // WHERE condition
+}
+
+func (l *ListPredicateExpression) node()       {}
+func (l *ListPredicateExpression) expression() {}
+
 // InExpression represents x IN [1, 2, 3]
 type InExpression struct {
 	Expression Expression

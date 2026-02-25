@@ -3,6 +3,7 @@ package graph
 import (
 	"fmt"
 	"math"
+	"math/rand"
 	"sort"
 	"strconv"
 	"strings"
@@ -170,6 +171,160 @@ func evalRange(args []cypher.Expression, match Match) interface{} {
 		}
 	}
 	return result
+}
+
+// evalSubstring implements substring(str, start[, length])
+func evalSubstring(args []cypher.Expression, match Match) interface{} {
+	if len(args) < 2 {
+		return nil
+	}
+	s, ok := scalarToString(evalExpr(args[0], match))
+	if !ok {
+		return nil
+	}
+	startRaw := scalarToInteger(evalExpr(args[1], match))
+	start, ok := startRaw.(int)
+	if !ok {
+		return nil
+	}
+	runes := []rune(s)
+	if start < 0 {
+		start = 0
+	}
+	if start >= len(runes) {
+		return ""
+	}
+	if len(args) >= 3 {
+		lengthRaw := scalarToInteger(evalExpr(args[2], match))
+		length, ok := lengthRaw.(int)
+		if !ok {
+			return nil
+		}
+		end := start + length
+		if end > len(runes) {
+			end = len(runes)
+		}
+		return string(runes[start:end])
+	}
+	return string(runes[start:])
+}
+
+// evalReplace implements replace(str, search, replacement)
+func evalReplace(args []cypher.Expression, match Match) interface{} {
+	if len(args) < 3 {
+		return nil
+	}
+	s, ok := scalarToString(evalExpr(args[0], match))
+	if !ok {
+		return nil
+	}
+	search, ok := scalarToString(evalExpr(args[1], match))
+	if !ok {
+		return nil
+	}
+	replacement, ok := scalarToString(evalExpr(args[2], match))
+	if !ok {
+		return nil
+	}
+	return strings.ReplaceAll(s, search, replacement)
+}
+
+// evalSplit implements split(str, delimiter)
+func evalSplit(args []cypher.Expression, match Match) interface{} {
+	if len(args) < 2 {
+		return nil
+	}
+	s, ok := scalarToString(evalExpr(args[0], match))
+	if !ok {
+		return nil
+	}
+	delim, ok := scalarToString(evalExpr(args[1], match))
+	if !ok {
+		return nil
+	}
+	parts := strings.Split(s, delim)
+	result := make([]interface{}, len(parts))
+	for i, p := range parts {
+		result[i] = p
+	}
+	return result
+}
+
+// evalLeftRight implements left(str, n) and right(str, n)
+func evalLeftRight(args []cypher.Expression, match Match, isLeft bool) interface{} {
+	if len(args) < 2 {
+		return nil
+	}
+	s, ok := scalarToString(evalExpr(args[0], match))
+	if !ok {
+		return nil
+	}
+	nRaw := scalarToInteger(evalExpr(args[1], match))
+	n, ok := nRaw.(int)
+	if !ok {
+		return nil
+	}
+	runes := []rune(s)
+	if n < 0 {
+		n = 0
+	}
+	if n > len(runes) {
+		n = len(runes)
+	}
+	if isLeft {
+		return string(runes[:n])
+	}
+	return string(runes[len(runes)-n:])
+}
+
+// evalJoin implements join(list, delimiter) — Cypher: apoc.text.join equivalent
+func evalJoin(args []cypher.Expression, match Match) interface{} {
+	if len(args) < 2 {
+		return nil
+	}
+	listVal := evalExpr(args[0], match)
+	delim, ok := scalarToString(evalExpr(args[1], match))
+	if !ok {
+		return nil
+	}
+	list, ok := listVal.([]interface{})
+	if !ok {
+		return nil
+	}
+	parts := make([]string, len(list))
+	for i, item := range list {
+		parts[i] = fmt.Sprint(item)
+	}
+	return strings.Join(parts, delim)
+}
+
+// evalPow implements pow(base, exponent) — Cypher: x ^ y
+func evalPow(args []cypher.Expression, match Match) interface{} {
+	if len(args) < 2 {
+		return nil
+	}
+	base, ok1 := scalarToNumeric(evalExpr(args[0], match))
+	exp, ok2 := scalarToNumeric(evalExpr(args[1], match))
+	if !ok1 || !ok2 {
+		return nil
+	}
+	return math.Pow(base, exp)
+}
+
+// evalStartEndNode implements startNode(r) and endNode(r)
+func evalStartEndNode(args []cypher.Expression, match Match, isStart bool) interface{} {
+	if len(args) < 1 {
+		return nil
+	}
+	val := evalExpr(args[0], match)
+	rel, ok := val.(*Relationship)
+	if !ok {
+		return nil
+	}
+	if isStart {
+		return rel.FromNodeID
+	}
+	return rel.ToNodeID
 }
 
 // applyScalarFunction evaluates a scalar function against a value.
@@ -355,6 +510,57 @@ func applyScalarFunction(fn string, value interface{}) interface{} {
 			return nil
 		}
 		return math.Exp(f)
+
+	case "sin":
+		f, ok := scalarToNumeric(value)
+		if !ok {
+			return nil
+		}
+		return math.Sin(f)
+
+	case "cos":
+		f, ok := scalarToNumeric(value)
+		if !ok {
+			return nil
+		}
+		return math.Cos(f)
+
+	case "tan":
+		f, ok := scalarToNumeric(value)
+		if !ok {
+			return nil
+		}
+		return math.Tan(f)
+
+	case "asin":
+		f, ok := scalarToNumeric(value)
+		if !ok {
+			return nil
+		}
+		return math.Asin(f)
+
+	case "acos":
+		f, ok := scalarToNumeric(value)
+		if !ok {
+			return nil
+		}
+		return math.Acos(f)
+
+	case "atan":
+		f, ok := scalarToNumeric(value)
+		if !ok {
+			return nil
+		}
+		return math.Atan(f)
+
+	case "rand":
+		return rand.Float64()
+
+	case "pi":
+		return math.Pi
+
+	case "e":
+		return math.E
 
 	// ── introspection ─────────────────────────────────────────────────────────
 	case "labels":
@@ -880,6 +1086,30 @@ func evalExpr(expr cypher.Expression, match Match) interface{} {
 			return nil
 		case "range":
 			return evalRange(e.Arguments, match)
+		case "substring":
+			return evalSubstring(e.Arguments, match)
+		case "replace":
+			return evalReplace(e.Arguments, match)
+		case "split":
+			return evalSplit(e.Arguments, match)
+		case "left":
+			return evalLeftRight(e.Arguments, match, true)
+		case "right":
+			return evalLeftRight(e.Arguments, match, false)
+		case "join":
+			return evalJoin(e.Arguments, match)
+		case "pow":
+			return evalPow(e.Arguments, match)
+		case "startnode":
+			return evalStartEndNode(e.Arguments, match, true)
+		case "endnode":
+			return evalStartEndNode(e.Arguments, match, false)
+		case "exists":
+			if len(e.Arguments) > 0 {
+				val := evalExpr(e.Arguments[0], match)
+				return val != nil
+			}
+			return false
 		default:
 			var arg interface{}
 			if len(e.Arguments) > 0 {
@@ -1035,6 +1265,57 @@ func evalBoolExpr(expr cypher.Expression, match Match) bool {
 			return !found
 		}
 		return found
+	case *cypher.FunctionCall:
+		if strings.ToLower(e.Name) == "exists" {
+			if len(e.Arguments) > 0 {
+				val := evalExpr(e.Arguments[0], match)
+				return val != nil
+			}
+			return false
+		}
+		// For other functions, evaluate and check truthiness
+		val := evalExpr(expr, match)
+		if b, ok := val.(bool); ok {
+			return b
+		}
+		return val != nil
+	case *cypher.ListPredicateExpression:
+		return evalListPredicate(e, match)
 	}
 	return evalExpr(expr, match) != nil
+}
+
+// evalListPredicate evaluates ANY/ALL/NONE/SINGLE(variable IN list WHERE condition)
+func evalListPredicate(e *cypher.ListPredicateExpression, match Match) bool {
+	listVal := evalExpr(e.List, match)
+	list, ok := listVal.([]interface{})
+	if !ok {
+		return false
+	}
+
+	count := 0
+	for _, item := range list {
+		// Clone match and bind the iteration variable
+		localMatch := make(Match, len(match)+1)
+		for k, v := range match {
+			localMatch[k] = v
+		}
+		localMatch[e.Variable] = item
+
+		if evalBoolExpr(e.Condition, localMatch) {
+			count++
+		}
+	}
+
+	switch strings.ToUpper(e.Function) {
+	case "ANY":
+		return count > 0
+	case "ALL":
+		return count == len(list)
+	case "NONE":
+		return count == 0
+	case "SINGLE":
+		return count == 1
+	}
+	return false
 }
