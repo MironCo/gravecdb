@@ -178,7 +178,7 @@ type ServerConfig struct {
 func ParseServerDSN(dsn string) (*ServerConfig, error) {
 	cfg := &ServerConfig{
 		Config: &Config{},
-		Host:   "localhost",
+		Host:   "0.0.0.0",
 		Port:   8080,
 	}
 
@@ -270,7 +270,7 @@ func ParseServerDSN(dsn string) (*ServerConfig, error) {
 	if cfg.EmbedderURL == "" {
 		cfg.EmbedderURL = os.Getenv("EMBEDDER_URL")
 	}
-	if cfg.Host == "localhost" {
+	if cfg.Host == "0.0.0.0" {
 		if h := os.Getenv("GRAVECDB_HOST"); h != "" {
 			cfg.Host = h
 		}

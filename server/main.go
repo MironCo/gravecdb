@@ -65,16 +65,14 @@ func main() {
 	// Create Gin router
 	r := gin.Default()
 
-	// Enable CORS for frontend
+	// Enable CORS - allow all origins (auth is the security layer, not CORS)
 	allowOrigins := serverConfig.AllowOrigins
-	if len(allowOrigins) == 0 {
-		allowOrigins = []string{"http://localhost:5173", "http://localhost:8080"}
-	}
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     allowOrigins,
+		AllowAllOrigins:  len(allowOrigins) == 0,
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
-		AllowCredentials: true,
+		AllowCredentials: len(allowOrigins) > 0,
 	}))
 
 	// Add auth middleware if configured
