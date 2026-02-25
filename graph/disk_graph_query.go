@@ -34,6 +34,9 @@ func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*
 		if query.DeleteClause != nil {
 			return g.executeDeleteQuery(query)
 		}
+		if query.RemoveClause != nil {
+			return g.executeRemoveQuery(query)
+		}
 		// Handle EMBED queries specially - need to persist embeddings
 		if query.EmbedClause != nil {
 			return g.executeEmbedQuery(query, embedder)
@@ -327,6 +330,38 @@ func (g *DiskGraph) executeDeleteQuery(query *Query) (*QueryResult, error) {
 	return &QueryResult{
 		Columns: []string{"deleted"},
 		Rows:    []map[string]interface{}{{"deleted": deletedCount}},
+	}, nil
+}
+
+// executeRemoveQuery handles MATCH...REMOVE queries
+func (g *DiskGraph) executeRemoveQuery(query *Query) (*QueryResult, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	matches := g.findMatchesUnlocked(query.MatchPattern, query.WhereClause)
+
+	removedCount := 0
+	for _, match := range matches {
+		for _, item := range query.RemoveClause.Items {
+			entity, ok := match[item.Variable]
+			if !ok {
+				continue
+			}
+			if node, ok := entity.(*Node); ok {
+				if item.Property != "" {
+					g.deleteNodePropertyUnlocked(node.ID, item.Property)
+					removedCount++
+				} else if item.Label != "" {
+					g.removeNodeLabelUnlocked(node.ID, item.Label)
+					removedCount++
+				}
+			}
+		}
+	}
+
+	return &QueryResult{
+		Columns: []string{"removed"},
+		Rows:    []map[string]interface{}{{"removed": removedCount}},
 	}, nil
 }
 
@@ -1731,7 +1766,69 @@ func (g *DiskGraph) findMatchesUnlocked(pattern *MatchPattern, where *WhereClaus
 				continue
 			}
 
-			// Get relationships for this node using index
+			if relPattern.VarLength {
+				// Variable-length path: BFS within [minHops, maxHops]
+				minHops := relPattern.MinHops
+				if minHops == 0 {
+					minHops = 1
+				}
+				maxHops := relPattern.MaxHops
+				if maxHops == 0 {
+					maxHops = 10
+				}
+
+				type bfsState struct {
+					nodeID string
+					hops   int
+				}
+				visited := map[string]bool{fromNode.ID: true}
+				queue := []bfsState{{fromNode.ID, 0}}
+
+				for len(queue) > 0 {
+					cur := queue[0]
+					queue = queue[1:]
+
+					if cur.hops >= minHops {
+						targetNode := g.getNodeUnlocked(cur.nodeID)
+						if targetNode != nil && targetNode.ValidTo == nil && cur.nodeID != fromNode.ID {
+							toIdx := relPattern.ToIndex
+							if toIdx < len(pattern.Nodes) {
+								toPattern := pattern.Nodes[toIdx]
+								if g.nodeMatchesPattern(targetNode, toPattern) {
+									newMatch := make(map[string]interface{})
+									for k, v := range match {
+										newMatch[k] = v
+									}
+									if toPattern.Variable != "" {
+										newMatch[toPattern.Variable] = targetNode
+									}
+									newMatches = append(newMatches, newMatch)
+								}
+							}
+						}
+					}
+
+					if cur.hops < maxHops {
+						rels := g.getRelationshipsForNodeUnlocked(cur.nodeID)
+						for _, rel := range rels {
+							if !g.relMatchesTypeAndDirection(rel, cur.nodeID, relPattern.Types, relPattern.Direction) {
+								continue
+							}
+							nextID := rel.ToNodeID
+							if rel.ToNodeID == cur.nodeID {
+								nextID = rel.FromNodeID
+							}
+							if !visited[nextID] {
+								visited[nextID] = true
+								queue = append(queue, bfsState{nextID, cur.hops + 1})
+							}
+						}
+					}
+				}
+				continue
+			}
+
+			// Single-hop relationship matching
 			rels := g.getRelationshipsForNodeUnlocked(fromNode.ID)
 
 			for _, rel := range rels {
@@ -1829,6 +1926,50 @@ func (g *DiskGraph) findMatchesUnlocked(pattern *MatchPattern, where *WhereClaus
 	}
 
 	return matches
+}
+
+// nodeMatchesPattern checks if a node satisfies a NodePattern's label/property constraints
+func (g *DiskGraph) nodeMatchesPattern(node *Node, pattern NodePattern) bool {
+	for _, reqLabel := range pattern.Labels {
+		found := false
+		for _, l := range node.Labels {
+			if l == reqLabel {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	if len(pattern.Properties) > 0 && !matchesProperties(node.Properties, pattern.Properties) {
+		return false
+	}
+	return true
+}
+
+// relMatchesTypeAndDirection checks if a relationship traversal from curNodeID satisfies type+direction constraints
+func (g *DiskGraph) relMatchesTypeAndDirection(rel *Relationship, curNodeID string, types []string, direction string) bool {
+	if len(types) > 0 {
+		found := false
+		for _, t := range types {
+			if rel.Type == t {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	switch direction {
+	case "->":
+		return rel.FromNodeID == curNodeID
+	case "<-":
+		return rel.ToNodeID == curNodeID
+	default:
+		return rel.FromNodeID == curNodeID || rel.ToNodeID == curNodeID
+	}
 }
 
 // filterMatchesUnlocked applies WHERE conditions (caller must hold lock)

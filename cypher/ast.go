@@ -147,11 +147,21 @@ func (d *DeleteClause) clause() {}
 
 // RemoveClause represents a REMOVE clause
 type RemoveClause struct {
-	Items []Expression // Property accesses or labels
+	Items []*RemoveItem
 }
 
 func (r *RemoveClause) node()   {}
 func (r *RemoveClause) clause() {}
+
+// RemoveItem represents a single REMOVE operation: n.property or n:Label
+type RemoveItem struct {
+	Variable string
+	Property string // set for REMOVE n.property
+	Label    string // set for REMOVE n:Label
+}
+
+func (r *RemoveItem) node()       {}
+func (r *RemoveItem) expression() {}
 
 // UnwindClause represents an UNWIND clause
 type UnwindClause struct {

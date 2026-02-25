@@ -532,6 +532,132 @@ def main():
             print(f"  a={r['a']!r}  b={r['b']!r}")
         print("  PASS")
 
+        # Clean up any stale RemoveTest nodes from previous runs
+        session.run("MATCH (r:RemoveTest) DETACH DELETE r").consume()
+
+        # Test 38: REMOVE property
+        print("\n[Test 38] REMOVE n.property")
+        print("-" * 40)
+        session.run("MERGE (r:RemoveTest {id: 'rp1', keep: 'yes', drop: 'bye'})").consume()
+        result = session.run("MATCH (r:RemoveTest {id: 'rp1'}) RETURN r.drop AS val")
+        rows = list(result)
+        assert len(rows) == 1 and rows[0]["val"] == "bye", f"Setup failed: {rows}"
+        session.run("MATCH (r:RemoveTest {id: 'rp1'}) REMOVE r.drop").consume()
+        result = session.run("MATCH (r:RemoveTest {id: 'rp1'}) RETURN r.keep AS keep, r.drop AS drop")
+        rows = list(result)
+        assert len(rows) == 1, f"Expected 1 row after REMOVE, got {len(rows)}"
+        assert rows[0]["keep"] == "yes", f"'keep' property should still be 'yes', got {rows[0]['keep']}"
+        assert rows[0]["drop"] is None, f"'drop' property should be None after REMOVE, got {rows[0]['drop']}"
+        print(f"  keep={rows[0]['keep']!r}  drop={rows[0]['drop']!r}")
+        print("  PASS")
+
+        # Test 39: REMOVE label
+        print("\n[Test 39] REMOVE n:Label")
+        print("-" * 40)
+        session.run("MERGE (r:RemoveTest:ExtraLabel {id: 'rl1'})").consume()
+        result = session.run("MATCH (r:ExtraLabel {id: 'rl1'}) RETURN r.id AS id")
+        rows = list(result)
+        assert len(rows) == 1, f"Setup failed - node with ExtraLabel not found"
+        session.run("MATCH (r:RemoveTest {id: 'rl1'}) REMOVE r:ExtraLabel").consume()
+        result = session.run("MATCH (r:ExtraLabel {id: 'rl1'}) RETURN r.id AS id")
+        rows = list(result)
+        assert len(rows) == 0, f"Node should no longer have ExtraLabel, but got {len(rows)} results"
+        result = session.run("MATCH (r:RemoveTest {id: 'rl1'}) RETURN r.id AS id")
+        rows = list(result)
+        assert len(rows) == 1, f"Node should still have RemoveTest label, got {len(rows)} results"
+        print(f"  ExtraLabel removed, RemoveTest label remains")
+        print("  PASS")
+
+        # Test 40: REMOVE multiple properties
+        print("\n[Test 40] REMOVE multiple properties in one clause")
+        print("-" * 40)
+        session.run("MERGE (r:RemoveTest {id: 'rp2', a: 1, b: 2, c: 3})").consume()
+        session.run("MATCH (r:RemoveTest {id: 'rp2'}) REMOVE r.a, r.b").consume()
+        result = session.run("MATCH (r:RemoveTest {id: 'rp2'}) RETURN r.a AS a, r.b AS b, r.c AS c")
+        rows = list(result)
+        assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+        assert rows[0]["a"] is None, f"'a' should be removed, got {rows[0]['a']}"
+        assert rows[0]["b"] is None, f"'b' should be removed, got {rows[0]['b']}"
+        assert rows[0]["c"] == 3,    f"'c' should still be 3, got {rows[0]['c']}"
+        print(f"  a={rows[0]['a']!r}  b={rows[0]['b']!r}  c={rows[0]['c']!r}")
+        print("  PASS")
+
+        # Set up a chain for variable-length path tests:
+        #   VLP_A -[:KNOWS]-> VLP_B -[:KNOWS]-> VLP_C -[:KNOWS]-> VLP_D
+        session.run("MATCH (n:VLPTest) DETACH DELETE n").consume()
+        session.run("CREATE (a:VLPTest {name: 'VLP_A'})").consume()
+        session.run("CREATE (b:VLPTest {name: 'VLP_B'})").consume()
+        session.run("CREATE (c:VLPTest {name: 'VLP_C'})").consume()
+        session.run("CREATE (d:VLPTest {name: 'VLP_D'})").consume()
+        session.run(
+            "MATCH (a:VLPTest {name: 'VLP_A'}), (b:VLPTest {name: 'VLP_B'}) "
+            "CREATE (a)-[:KNOWS]->(b)"
+        ).consume()
+        session.run(
+            "MATCH (b:VLPTest {name: 'VLP_B'}), (c:VLPTest {name: 'VLP_C'}) "
+            "CREATE (b)-[:KNOWS]->(c)"
+        ).consume()
+        session.run(
+            "MATCH (c:VLPTest {name: 'VLP_C'}), (d:VLPTest {name: 'VLP_D'}) "
+            "CREATE (c)-[:KNOWS]->(d)"
+        ).consume()
+
+        # Test 41: Variable-length path — *1..2 (1 or 2 hops)
+        print("\n[Test 41] Variable-length path — (a)-[:KNOWS*1..2]->(b)")
+        print("-" * 40)
+        result = session.run(
+            "MATCH (a:VLPTest)-[:KNOWS*1..2]->(b:VLPTest) "
+            "RETURN a.name AS from, b.name AS to ORDER BY from, to"
+        )
+        rows = list(result)
+        pairs = [(r["from"], r["to"]) for r in rows]
+        # 1-hop: A->B, B->C, C->D  (3)
+        # 2-hop: A->C, B->D        (2)
+        # total: 5
+        assert len(pairs) == 5, f"Expected 5 paths within 1..2 hops, got {len(pairs)}: {pairs}"
+        assert ("VLP_A", "VLP_B") in pairs, f"Missing A->B (1-hop): {pairs}"
+        assert ("VLP_A", "VLP_C") in pairs, f"Missing A->C (2-hop): {pairs}"
+        assert ("VLP_B", "VLP_C") in pairs, f"Missing B->C (1-hop): {pairs}"
+        assert ("VLP_B", "VLP_D") in pairs, f"Missing B->D (2-hop): {pairs}"
+        assert ("VLP_C", "VLP_D") in pairs, f"Missing C->D (1-hop): {pairs}"
+        for r in rows:
+            print(f"  {r['from']} -> {r['to']}")
+        print("  PASS")
+
+        # Test 42: Variable-length path — exact 2 hops (*2)
+        print("\n[Test 42] Variable-length path — exact 2 hops (*2)")
+        print("-" * 40)
+        result = session.run(
+            "MATCH (a:VLPTest)-[:KNOWS*2]->(b:VLPTest) "
+            "RETURN a.name AS from, b.name AS to ORDER BY from, to"
+        )
+        rows = list(result)
+        pairs = [(r["from"], r["to"]) for r in rows]
+        # Exactly 2 hops: A->C, B->D
+        assert len(pairs) == 2, f"Expected 2 exact-2-hop paths, got {len(pairs)}: {pairs}"
+        assert ("VLP_A", "VLP_C") in pairs, f"Missing A->C: {pairs}"
+        assert ("VLP_B", "VLP_D") in pairs, f"Missing B->D: {pairs}"
+        for r in rows:
+            print(f"  {r['from']} -2-> {r['to']}")
+        print("  PASS")
+
+        # Test 43: Variable-length path — unbounded (*)
+        print("\n[Test 43] Variable-length path — unbounded (*)")
+        print("-" * 40)
+        result = session.run(
+            "MATCH (a:VLPTest {name: 'VLP_A'})-[:KNOWS*]->(b:VLPTest) "
+            "RETURN b.name AS name ORDER BY name"
+        )
+        rows = list(result)
+        names = [r["name"] for r in rows]
+        # A can reach B (1-hop), C (2-hop), D (3-hop)
+        assert len(names) == 3, f"Expected 3 reachable nodes from A, got {len(names)}: {names}"
+        assert "VLP_B" in names, f"Missing VLP_B: {names}"
+        assert "VLP_C" in names, f"Missing VLP_C: {names}"
+        assert "VLP_D" in names, f"Missing VLP_D: {names}"
+        print(f"  Reachable from VLP_A: {names}")
+        print("  PASS")
+
     driver.close()
     print("\n" + "=" * 50)
     print("All tests completed!")

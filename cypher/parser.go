@@ -377,14 +377,37 @@ func (p *Parser) parseDeleteClause(detach bool) *DeleteClause {
 	return clause
 }
 
-// parseRemoveClause parses REMOVE items
+// parseRemoveClause parses REMOVE items: REMOVE n.prop, n:Label, ...
 func (p *Parser) parseRemoveClause() *RemoveClause {
 	clause := &RemoveClause{}
 	p.nextToken() // consume REMOVE
 
 	for {
-		expr := p.parseExpression(LOWEST)
-		clause.Items = append(clause.Items, expr)
+		if !p.curTokenIs(TOKEN_IDENT) {
+			break
+		}
+		varName := p.curToken.Literal
+		p.nextToken()
+
+		item := &RemoveItem{Variable: varName}
+		if p.curTokenIs(TOKEN_COLON) {
+			p.nextToken() // consume :
+			if p.curToken.Literal != "" && !p.curTokenIs(TOKEN_EOF) {
+				item.Label = p.curToken.Literal
+				p.nextToken()
+			}
+		} else if p.curTokenIs(TOKEN_DOT) {
+			p.nextToken() // consume .
+			if p.curToken.Literal != "" && !p.curTokenIs(TOKEN_EOF) {
+				item.Property = p.curToken.Literal
+				p.nextToken()
+			}
+		} else {
+			break
+		}
+
+		clause.Items = append(clause.Items, item)
+
 		if !p.curTokenIs(TOKEN_COMMA) {
 			break
 		}
@@ -407,7 +430,7 @@ func (p *Parser) parseUnwindClause() *UnwindClause {
 	}
 	p.nextToken()
 
-	if !p.curTokenIs(TOKEN_IDENT) {
+	if p.curToken.Literal == "" || p.curTokenIs(TOKEN_EOF) {
 		p.addError("expected identifier after AS")
 		return nil
 	}
@@ -435,7 +458,7 @@ func (p *Parser) parseReturnItems() []*ReturnItem {
 		// Check for AS alias
 		if p.curTokenIs(TOKEN_AS) {
 			p.nextToken()
-			if p.curTokenIs(TOKEN_IDENT) {
+			if p.curToken.Literal != "" && !p.curTokenIs(TOKEN_EOF) {
 				item.Alias = p.curToken.Literal
 				p.nextToken()
 			}
@@ -576,7 +599,7 @@ func (p *Parser) parseNodePattern() *NodePattern {
 	// Parse labels
 	for p.curTokenIs(TOKEN_COLON) {
 		p.nextToken()
-		if !p.curTokenIs(TOKEN_IDENT) {
+		if p.curToken.Literal == "" || p.curTokenIs(TOKEN_EOF) {
 			p.addError("expected label after :")
 			return nil
 		}
@@ -626,7 +649,7 @@ func (p *Parser) parseRelationshipPattern() *RelationshipPattern {
 		if p.curTokenIs(TOKEN_COLON) {
 			p.nextToken()
 			for {
-				if !p.curTokenIs(TOKEN_IDENT) {
+				if p.curToken.Literal == "" || p.curTokenIs(TOKEN_EOF) {
 					p.addError("expected relationship type after :")
 					return nil
 				}
@@ -812,9 +835,10 @@ func (p *Parser) parseExpression(precedence int) Expression {
 	case TOKEN_COUNT, TOKEN_SUM, TOKEN_AVG, TOKEN_MIN, TOKEN_MAX, TOKEN_COLLECT:
 		left = p.parseAggregateFunction()
 	default:
-		// Check for function calls (identifiers followed by parentheses)
-		if p.curTokenIs(TOKEN_IDENT) && p.peekTokenIs(TOKEN_LPAREN) {
-			left = p.parseFunctionCall()
+		// Treat keyword tokens as identifiers when used as variable/alias names
+		// (e.g., ORDER BY from, RETURN x AS to)
+		if p.curToken.Literal != "" && !p.curTokenIs(TOKEN_EOF) {
+			left = p.parseIdentifier()
 		} else {
 			p.addError("unexpected token in expression: %s", p.curToken.Literal)
 			return nil
@@ -930,12 +954,12 @@ func (p *Parser) parseMapLiteral() Expression {
 	p.nextToken() // consume {
 
 	for !p.curTokenIs(TOKEN_RBRACE) && !p.curTokenIs(TOKEN_EOF) {
-		// Parse key
-		if !p.curTokenIs(TOKEN_IDENT) && !p.curTokenIs(TOKEN_STRING) {
+		// Parse key — identifiers, strings, or reserved words used as property names (e.g. {drop: x, from: y})
+		key := p.curToken.Literal
+		if key == "" || p.curTokenIs(TOKEN_RBRACE) || p.curTokenIs(TOKEN_COMMA) || p.curTokenIs(TOKEN_EOF) {
 			p.addError("expected key in map literal")
 			return nil
 		}
-		key := p.curToken.Literal
 		p.nextToken()
 
 		// Expect colon
@@ -988,7 +1012,7 @@ func (p *Parser) parseNegationExpression() Expression {
 
 func (p *Parser) parsePropertyAccess(left Expression) Expression {
 	p.nextToken() // consume .
-	if !p.curTokenIs(TOKEN_IDENT) {
+	if p.curToken.Literal == "" || p.curTokenIs(TOKEN_EOF) {
 		p.addError("expected property name after .")
 		return nil
 	}
@@ -1247,7 +1271,7 @@ func (p *Parser) parseEmbedClause() *EmbedClause {
 	p.nextToken() // consume EMBED
 
 	// First token should be variable
-	if !p.curTokenIs(TOKEN_IDENT) {
+	if p.curToken.Literal == "" || p.curTokenIs(TOKEN_EOF) {
 		p.addError("expected variable in EMBED clause")
 		return nil
 	}
@@ -1257,7 +1281,7 @@ func (p *Parser) parseEmbedClause() *EmbedClause {
 	// Check for property access (EMBED p.description)
 	if p.curTokenIs(TOKEN_DOT) {
 		p.nextToken()
-		if !p.curTokenIs(TOKEN_IDENT) {
+		if p.curToken.Literal == "" || p.curTokenIs(TOKEN_EOF) {
 			p.addError("expected property name after .")
 			return nil
 		}

@@ -31,6 +31,7 @@ type GraphQuery struct {
 	SimilarToClause *GraphSimilarToClause
 	UnwindClause    *GraphUnwindClause
 	MergeClause     *GraphCreateClause // reuses create structure; execution differs
+	RemoveClause    *GraphRemoveClause
 	Pipeline        *GraphPipeline     // set when WITH clause is present
 	IsPathQuery     bool
 	Optional        bool               // true when OPTIONAL MATCH (no-match → one empty row)
@@ -78,6 +79,9 @@ type GraphRelPattern struct {
 	FromIndex int
 	ToIndex   int
 	Direction string
+	VarLength bool
+	MinHops   int // 0 = unspecified (defaults to 1)
+	MaxHops   int // 0 = unspecified (defaults to 10)
 }
 
 type GraphCreateClause struct {
@@ -185,6 +189,16 @@ type GraphSimilarToClause struct {
 	DriftMode   bool
 }
 
+type GraphRemoveItem struct {
+	Variable string
+	Property string // set for REMOVE n.property
+	Label    string // set for REMOVE n:Label
+}
+
+type GraphRemoveClause struct {
+	Items []GraphRemoveItem
+}
+
 // ConvertToGraphQuery converts the AST to graph-compatible query
 func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
 	// Route to pipeline executor when WITH is present OR multiple MATCH clauses exist
@@ -280,6 +294,17 @@ func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
 				return nil, err
 			}
 			gq.MergeClause = mc
+
+		case *RemoveClause:
+			rc := &GraphRemoveClause{}
+			for _, item := range c.Items {
+				rc.Items = append(rc.Items, GraphRemoveItem{
+					Variable: item.Variable,
+					Property: item.Property,
+					Label:    item.Label,
+				})
+			}
+			gq.RemoveClause = rc
 		}
 	}
 
@@ -321,6 +346,14 @@ func convertPatternToGraph(p *Pattern) (*GraphMatchPattern, error) {
 					direction = "<-"
 				}
 
+				minHops, maxHops := 0, 0
+				if e.MinHops != nil {
+					minHops = *e.MinHops
+				}
+				if e.MaxHops != nil {
+					maxHops = *e.MaxHops
+				}
+
 				// Calculate indices within this part
 				nodeIdx := (i + 1) / 2 // Node index relative to this pattern part
 				gp.Relationships = append(gp.Relationships, GraphRelPattern{
@@ -329,6 +362,9 @@ func convertPatternToGraph(p *Pattern) (*GraphMatchPattern, error) {
 					FromIndex: baseNodeIndex + nodeIdx - 1,
 					ToIndex:   baseNodeIndex + nodeIdx,
 					Direction: direction,
+					VarLength: e.VarLength,
+					MinHops:   minHops,
+					MaxHops:   maxHops,
 				})
 			}
 		}
