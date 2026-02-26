@@ -880,6 +880,118 @@ def main():
         print(f"  date('2024-06-15') = {parsed!r}")
         print("  PASS")
 
+        # Test 59: FOREACH — iterate list and SET properties
+        print("\n[Test 59] FOREACH (x IN list | SET ...)")
+        print("-" * 40)
+        session.run("MATCH (f:ForeachTest) DETACH DELETE f").consume()
+        session.run("CREATE (f:ForeachTest {name: 'target', tags: ['a', 'b', 'c']})").consume()
+        session.run(
+            "MATCH (f:ForeachTest {name: 'target'}) "
+            "FOREACH (i IN range(1, 3) | SET f.count = i)"
+        ).consume()
+        result = session.run("MATCH (f:ForeachTest {name: 'target'}) RETURN f.count AS count")
+        rows = list(result)
+        assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+        # After iterating 1,2,3 the last SET wins: count = 3
+        assert rows[0]["count"] == 3, f"Expected count=3 (last iteration), got {rows[0]['count']}"
+        print(f"  FOREACH set count = {rows[0]['count']}")
+        print("  PASS")
+
+        # Test 60: List comprehension [x IN list | expr]
+        print("\n[Test 60] List comprehension [x IN list | x * 2]")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND [1] AS dummy "
+            "RETURN [x IN range(1, 5) | x * 2] AS doubled"
+        )
+        rows = list(result)
+        assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+        doubled = rows[0]["doubled"]
+        assert doubled == [2.0, 4.0, 6.0, 8.0, 10.0], f"Expected [2,4,6,8,10], got {doubled}"
+        print(f"  [x IN range(1,5) | x*2] = {doubled}")
+        print("  PASS")
+
+        # Test 61: List comprehension with WHERE filter
+        print("\n[Test 61] List comprehension [x IN list WHERE x > 3 | x]")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND [1] AS dummy "
+            "RETURN [x IN range(1, 5) WHERE x > 3 | x] AS filtered"
+        )
+        rows = list(result)
+        assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+        filtered = rows[0]["filtered"]
+        assert filtered == [4, 5], f"Expected [4, 5], got {filtered}"
+        print(f"  [x IN range(1,5) WHERE x > 3 | x] = {filtered}")
+        print("  PASS")
+
+        # Test 62: Datetime property access (.year, .month, .day)
+        print("\n[Test 62] Datetime property access (.year, .month, .day)")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND [1] AS dummy "
+            "RETURN date('2024-06-15').year AS y, date('2024-06-15').month AS m, date('2024-06-15').day AS d"
+        )
+        rows = list(result)
+        assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+        assert rows[0]["y"] == 2024, f"Expected year=2024, got {rows[0]['y']}"
+        assert rows[0]["m"] == 6, f"Expected month=6, got {rows[0]['m']}"
+        assert rows[0]["d"] == 15, f"Expected day=15, got {rows[0]['d']}"
+        print(f"  date('2024-06-15').year = {rows[0]['y']}")
+        print(f"  date('2024-06-15').month = {rows[0]['m']}")
+        print(f"  date('2024-06-15').day = {rows[0]['d']}")
+        print("  PASS")
+
+        # Test 63: Datetime property access (.hour, .minute, .second)
+        print("\n[Test 63] Datetime property access (.hour, .minute, .second)")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND [1] AS dummy "
+            "RETURN datetime('2024-06-15T14:30:45Z').hour AS h, "
+            "datetime('2024-06-15T14:30:45Z').minute AS mi, "
+            "datetime('2024-06-15T14:30:45Z').second AS s"
+        )
+        rows = list(result)
+        assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+        assert rows[0]["h"] == 14, f"Expected hour=14, got {rows[0]['h']}"
+        assert rows[0]["mi"] == 30, f"Expected minute=30, got {rows[0]['mi']}"
+        assert rows[0]["s"] == 45, f"Expected second=45, got {rows[0]['s']}"
+        print(f"  datetime(...).hour = {rows[0]['h']}")
+        print(f"  datetime(...).minute = {rows[0]['mi']}")
+        print(f"  datetime(...).second = {rows[0]['s']}")
+        print("  PASS")
+
+        # Test 64: String predicates in WHERE (STARTS WITH, ENDS WITH, CONTAINS already tested 26-28,
+        # but test them on node properties for completeness)
+        print("\n[Test 64] String predicates on node properties")
+        print("-" * 40)
+        session.run("MATCH (sp:StringPredTest) DETACH DELETE sp").consume()
+        session.run("CREATE (sp:StringPredTest {name: 'GraphDatabase'})").consume()
+        session.run("CREATE (sp:StringPredTest {name: 'PostgreSQL'})").consume()
+        session.run("CREATE (sp:StringPredTest {name: 'MongoDB'})").consume()
+        result = session.run(
+            "MATCH (sp:StringPredTest) WHERE sp.name STARTS WITH 'Graph' RETURN sp.name AS name"
+        )
+        rows = list(result)
+        names = [r["name"] for r in rows]
+        assert names == ["GraphDatabase"], f"STARTS WITH 'Graph' expected ['GraphDatabase'], got {names}"
+        result = session.run(
+            "MATCH (sp:StringPredTest) WHERE sp.name ENDS WITH 'SQL' RETURN sp.name AS name ORDER BY name"
+        )
+        rows = list(result)
+        names = [r["name"] for r in rows]
+        assert names == ["PostgreSQL"], f"ENDS WITH 'SQL' expected ['PostgreSQL'], got {names}"
+        result = session.run(
+            "MATCH (sp:StringPredTest) WHERE sp.name CONTAINS 'DB' RETURN sp.name AS name"
+        )
+        rows = list(result)
+        names = [r["name"] for r in rows]
+        assert names == ["MongoDB"], f"CONTAINS 'DB' expected ['MongoDB'], got {names}"
+        print(f"  STARTS WITH 'Graph': {['GraphDatabase']}")
+        print(f"  ENDS WITH 'SQL': {['PostgreSQL']}")
+        print(f"  CONTAINS 'DB': {['MongoDB']}")
+        print("  PASS")
+
     driver.close()
     print("\n" + "=" * 50)
     print("All tests completed!")

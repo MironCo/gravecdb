@@ -175,6 +175,16 @@ type UnwindClause struct {
 func (u *UnwindClause) node()   {}
 func (u *UnwindClause) clause() {}
 
+// ForeachClause represents FOREACH (variable IN list | SET ...)
+type ForeachClause struct {
+	Variable string
+	List     Expression
+	Updates  []*SetItem // SET operations inside FOREACH
+}
+
+func (f *ForeachClause) node()   {}
+func (f *ForeachClause) clause() {}
+
 // ============================================================================
 // Custom Extension Clauses
 // ============================================================================
@@ -474,6 +484,27 @@ type ListPredicateExpression struct {
 
 func (l *ListPredicateExpression) node()       {}
 func (l *ListPredicateExpression) expression() {}
+
+// PatternComprehension represents [(n)-[:REL]->(m) | m.name] or [(n)-[:REL]->(m) WHERE cond | expr]
+type PatternComprehension struct {
+	Pattern    *PatternPart // the inner pattern
+	Where      Expression   // optional WHERE condition
+	Projection Expression   // expression after |
+}
+
+func (pc *PatternComprehension) node()       {}
+func (pc *PatternComprehension) expression() {}
+
+// ListComprehension represents [x IN list WHERE cond | expr]
+type ListComprehension struct {
+	Variable   string     // iteration variable
+	List       Expression // the list to iterate
+	Where      Expression // optional filter condition (can be nil)
+	Projection Expression // expression to map each element
+}
+
+func (lc *ListComprehension) node()       {}
+func (lc *ListComprehension) expression() {}
 
 // InExpression represents x IN [1, 2, 3]
 type InExpression struct {

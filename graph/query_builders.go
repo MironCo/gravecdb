@@ -1039,7 +1039,16 @@ func evalExpr(expr cypher.Expression, match Match) interface{} {
 		if ident, ok := e.Object.(*cypher.Identifier); ok {
 			varName = ident.Name
 		}
-		return extractMatchValue(match, varName, e.Property)
+		val := extractMatchValue(match, varName, e.Property)
+		if val != nil {
+			return val
+		}
+		// Try datetime property access on the evaluated object value
+		objVal := evalExpr(e.Object, match)
+		if dtVal := evalDatetimeProperty(objVal, e.Property); dtVal != nil {
+			return dtVal
+		}
+		return nil
 	case *cypher.IntegerLiteral:
 		return int(e.Value)
 	case *cypher.FloatLiteral:
@@ -1183,6 +1192,8 @@ func evalExpr(expr cypher.Expression, match Match) interface{} {
 			return !found
 		}
 		return found
+	case *cypher.ListComprehension:
+		return evalListComprehension(e, match)
 	}
 	return nil
 }
@@ -1359,4 +1370,85 @@ func evalListPredicate(e *cypher.ListPredicateExpression, match Match) bool {
 		return count == 1
 	}
 	return false
+}
+
+// evalListComprehension evaluates [x IN list WHERE cond | expr]
+func evalListComprehension(e *cypher.ListComprehension, match Match) interface{} {
+	listVal := evalExpr(e.List, match)
+	list, ok := listVal.([]interface{})
+	if !ok {
+		return nil
+	}
+
+	var result []interface{}
+	for _, item := range list {
+		localMatch := copyMatch(match)
+		localMatch[e.Variable] = item
+
+		// Apply optional WHERE filter
+		if e.Where != nil {
+			if !evalBoolExpr(e.Where, localMatch) {
+				continue
+			}
+		}
+
+		// Apply projection
+		result = append(result, evalExpr(e.Projection, localMatch))
+	}
+	return result
+}
+
+// evalDatetimeProperty extracts temporal components (.year, .month, .day, etc.)
+// from a datetime string value. Returns nil if not applicable.
+func evalDatetimeProperty(val interface{}, property string) interface{} {
+	if val == nil {
+		return nil
+	}
+	s, ok := val.(string)
+	if !ok {
+		return nil
+	}
+
+	// Try to parse as various datetime formats
+	var t time.Time
+	var parsed bool
+	for _, layout := range []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+		"15:04:05Z07:00",
+		"15:04:05",
+	} {
+		if pt, err := time.Parse(layout, s); err == nil {
+			t = pt
+			parsed = true
+			break
+		}
+	}
+	if !parsed {
+		return nil
+	}
+
+	switch strings.ToLower(property) {
+	case "year":
+		return t.Year()
+	case "month":
+		return int(t.Month())
+	case "day":
+		return t.Day()
+	case "hour":
+		return t.Hour()
+	case "minute":
+		return t.Minute()
+	case "second":
+		return t.Second()
+	case "millisecond":
+		return t.Nanosecond() / 1_000_000
+	case "dayofweek":
+		return int(t.Weekday())
+	case "dayofyear":
+		return t.YearDay()
+	}
+	return nil
 }

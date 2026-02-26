@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MironCo/gravecdb/cypher"
 	"github.com/MironCo/gravecdb/embedding"
 )
 
@@ -26,6 +27,10 @@ func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*
 	case "CREATE":
 		return g.executeCreateQuery(query)
 	case "MATCH":
+		// Check for FOREACH first (MATCH ... FOREACH)
+		if query.ForeachClause != nil {
+			return g.executeForeachQuery(query)
+		}
 		// Check if this is a mutating MATCH query
 		if query.CreateClause != nil {
 			return g.executeMatchCreateQuery(query)
@@ -115,6 +120,61 @@ func (g *DiskGraph) executeUnionQuery(query *Query, embedder Embedder) (*QueryRe
 	}
 
 	return combined, nil
+}
+
+// executeForeachQuery handles MATCH ... FOREACH (var IN list | SET ...)
+func (g *DiskGraph) executeForeachQuery(query *Query) (*QueryResult, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	matches := g.findMatchesUnlocked(query.MatchPattern, query.WhereClause)
+
+	updatedCount := 0
+	fc := query.ForeachClause
+	for _, match := range matches {
+		// Evaluate the list expression in context of this match
+		listVal := evalExpr(fc.ListExpr, match)
+		list, ok := listVal.([]interface{})
+		if !ok {
+			continue
+		}
+
+		for _, item := range list {
+			// Create a local match with the iteration variable bound
+			localMatch := copyMatch(match)
+			localMatch[fc.Variable] = item
+
+			// Apply each SET operation
+			for _, update := range fc.Updates {
+				if update.Property == nil {
+					continue
+				}
+				varName := ""
+				if ident, ok := update.Property.Object.(*cypher.Identifier); ok {
+					varName = ident.Name
+				}
+				propName := update.Property.Property
+				val := evalExpr(update.Expression, localMatch)
+
+				entity, ok := localMatch[varName]
+				if !ok {
+					continue
+				}
+				if node, ok := entity.(*Node); ok {
+					g.setNodePropertyUnlocked(node.ID, propName, val)
+					updatedCount++
+				} else if rel, ok := entity.(*Relationship); ok {
+					g.setRelPropertyUnlocked(rel.ID, propName, val)
+					updatedCount++
+				}
+			}
+		}
+	}
+
+	return &QueryResult{
+		Columns: []string{"updated"},
+		Rows:    []map[string]interface{}{{"updated": updatedCount}},
+	}, nil
 }
 
 // executeMergeQuery finds a node matching the pattern; creates it if absent.

@@ -35,6 +35,7 @@ type GraphQuery struct {
 	Pipeline        *GraphPipeline     // set when WITH clause is present
 	IsPathQuery     bool
 	Optional        bool               // true when OPTIONAL MATCH (no-match → one empty row)
+	ForeachClause   *GraphForeachClause
 	UnionQueries    []*GraphQuery      // sub-queries for UNION
 	UnionAll        bool               // true for UNION ALL (keep duplicates)
 }
@@ -191,6 +192,12 @@ type GraphSimilarToClause struct {
 	DriftMode   bool
 }
 
+type GraphForeachClause struct {
+	Variable string
+	ListExpr Expression  // expression for the list (evaluated at execution)
+	Updates  []*SetItem  // SET operations to apply
+}
+
 type GraphRemoveItem struct {
 	Variable string
 	Property string // set for REMOVE n.property
@@ -323,6 +330,13 @@ func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
 				})
 			}
 			gq.RemoveClause = rc
+
+		case *ForeachClause:
+			gq.ForeachClause = &GraphForeachClause{
+				Variable: c.Variable,
+				ListExpr: c.List,
+				Updates:  c.Updates,
+			}
 		}
 	}
 
@@ -661,12 +675,17 @@ func convertReturnToGraph(r *ReturnClause) *GraphReturnClause {
 			case *PropertyAccess:
 				if ident, ok := e.Object.(*Identifier); ok {
 					gi.Variable = ident.Name
+					gi.Property = e.Property
+				} else {
+					// Complex property access (e.g., date('2024-06-15').year)
+					gi.Expr = e
 				}
-				gi.Property = e.Property
 			case *Star:
 				gi.Variable = "*"
 			case *CaseExpression, *IsNullExpression, *InExpression,
-				*BinaryExpression, *UnaryExpression, *FunctionCall:
+				*BinaryExpression, *UnaryExpression, *FunctionCall,
+				*ListComprehension, *PatternComprehension, *ListLiteral,
+				*ComparisonExpression, *MapLiteral:
 				gi.Expr = e
 			}
 		}

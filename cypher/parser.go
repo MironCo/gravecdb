@@ -167,6 +167,8 @@ func (p *Parser) parseClause() Clause {
 		return p.parseUnwindClause()
 	case TOKEN_AT:
 		return p.parseTimeClause()
+	case TOKEN_FOREACH:
+		return p.parseForeachClause()
 	case TOKEN_EMBED:
 		return p.parseEmbedClause()
 	case TOKEN_SIMILAR:
@@ -377,7 +379,8 @@ func (p *Parser) parseSetItem() *SetItem {
 	item := &SetItem{}
 
 	// Parse left side (variable or property access)
-	left := p.parseExpression(LOWEST)
+	// Use COMPARISON precedence so = is not consumed as an infix comparison operator
+	left := p.parseExpression(COMPARISON)
 
 	// Check for property access
 	if prop, ok := left.(*PropertyAccess); ok {
@@ -976,9 +979,20 @@ func (p *Parser) parseNullLiteral() Expression {
 }
 
 func (p *Parser) parseListLiteral() Expression {
-	list := &ListLiteral{}
 	p.nextToken() // consume [
 
+	// Check for list comprehension: [x IN list WHERE cond | expr]
+	// Detect by: identifier followed by IN
+	if (p.curTokenIs(TOKEN_IDENT) || (p.curToken.Literal != "" && !p.curTokenIs(TOKEN_EOF) && !p.curTokenIs(TOKEN_RBRACKET))) && p.peekTokenIs(TOKEN_IN) {
+		return p.parseListComprehension()
+	}
+
+	// Check for pattern comprehension: [(node)-[:REL]->(m) | expr]
+	if p.curTokenIs(TOKEN_LPAREN) {
+		return p.parsePatternComprehension()
+	}
+
+	list := &ListLiteral{}
 	for !p.curTokenIs(TOKEN_RBRACKET) && !p.curTokenIs(TOKEN_EOF) {
 		elem := p.parseExpression(LOWEST)
 		list.Elements = append(list.Elements, elem)
@@ -993,6 +1007,78 @@ func (p *Parser) parseListLiteral() Expression {
 	}
 	p.nextToken()
 	return list
+}
+
+// parseListComprehension parses [x IN list WHERE cond | expr]
+// Called after consuming [, with cursor on the variable name.
+func (p *Parser) parseListComprehension() Expression {
+	lc := &ListComprehension{}
+	lc.Variable = p.curToken.Literal
+	p.nextToken() // consume variable
+
+	if !p.curTokenIs(TOKEN_IN) {
+		p.addError("expected IN in list comprehension")
+		return nil
+	}
+	p.nextToken() // consume IN
+
+	lc.List = p.parseExpression(LOWEST)
+
+	// Optional WHERE
+	if p.curTokenIs(TOKEN_WHERE) {
+		p.nextToken() // consume WHERE
+		lc.Where = p.parseExpression(LOWEST)
+	}
+
+	// Expect |
+	if !p.curTokenIs(TOKEN_PIPE) {
+		p.addError("expected | in list comprehension")
+		return nil
+	}
+	p.nextToken() // consume |
+
+	lc.Projection = p.parseExpression(LOWEST)
+
+	if !p.curTokenIs(TOKEN_RBRACKET) {
+		p.addError("expected ] to close list comprehension")
+		return nil
+	}
+	p.nextToken() // consume ]
+
+	return lc
+}
+
+// parsePatternComprehension parses [(n)-[:REL]->(m) | expr] or [(n)-[:REL]->(m) WHERE cond | expr]
+// Called after consuming [, with cursor on (.
+func (p *Parser) parsePatternComprehension() Expression {
+	part := p.parsePatternPart()
+	if part == nil {
+		p.addError("expected pattern in pattern comprehension")
+		return nil
+	}
+
+	pc := &PatternComprehension{Pattern: part}
+
+	if p.curTokenIs(TOKEN_WHERE) {
+		p.nextToken() // consume WHERE
+		pc.Where = p.parseExpression(LOWEST)
+	}
+
+	if !p.curTokenIs(TOKEN_PIPE) {
+		p.addError("expected | in pattern comprehension")
+		return nil
+	}
+	p.nextToken() // consume |
+
+	pc.Projection = p.parseExpression(LOWEST)
+
+	if !p.curTokenIs(TOKEN_RBRACKET) {
+		p.addError("expected ] to close pattern comprehension")
+		return nil
+	}
+	p.nextToken() // consume ]
+
+	return pc
 }
 
 func (p *Parser) parseMapLiteral() Expression {
@@ -1346,6 +1432,71 @@ func (p *Parser) parseCaseExpression() Expression {
 	p.nextToken()
 
 	return ce
+}
+
+// parseForeachClause parses FOREACH (variable IN list | SET ...)
+func (p *Parser) parseForeachClause() *ForeachClause {
+	clause := &ForeachClause{}
+	p.nextToken() // consume FOREACH
+
+	if !p.curTokenIs(TOKEN_LPAREN) {
+		p.addError("expected ( after FOREACH")
+		return nil
+	}
+	p.nextToken() // consume (
+
+	// Parse variable
+	if p.curToken.Literal == "" || p.curTokenIs(TOKEN_EOF) {
+		p.addError("expected variable in FOREACH")
+		return nil
+	}
+	clause.Variable = p.curToken.Literal
+	p.nextToken()
+
+	// Expect IN
+	if !p.curTokenIs(TOKEN_IN) {
+		p.addError("expected IN after variable in FOREACH")
+		return nil
+	}
+	p.nextToken() // consume IN
+
+	// Parse list expression
+	clause.List = p.parseExpression(LOWEST)
+
+	// Expect | (pipe)
+	if !p.curTokenIs(TOKEN_PIPE) {
+		p.addError("expected | after list in FOREACH")
+		return nil
+	}
+	p.nextToken() // consume |
+
+	// Parse SET operations inside FOREACH
+	for !p.curTokenIs(TOKEN_RPAREN) && !p.curTokenIs(TOKEN_EOF) {
+		if p.curTokenIs(TOKEN_SET) {
+			p.nextToken() // consume SET
+			for {
+				item := p.parseSetItem()
+				if item != nil {
+					clause.Updates = append(clause.Updates, item)
+				}
+				if !p.curTokenIs(TOKEN_COMMA) {
+					break
+				}
+				p.nextToken()
+			}
+		} else {
+			p.addError("expected SET inside FOREACH, got %s", p.curToken.Literal)
+			return nil
+		}
+	}
+
+	if !p.curTokenIs(TOKEN_RPAREN) {
+		p.addError("expected ) to close FOREACH")
+		return nil
+	}
+	p.nextToken() // consume )
+
+	return clause
 }
 
 // ============================================================================
