@@ -821,6 +821,65 @@ def main():
         print(f"  Nodes with SINGLE tag = 'go': {ids}")
         print("  PASS")
 
+        # Test 55: UNION
+        print("\n[Test 55] UNION (deduplicated)")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND [1, 2, 3] AS x RETURN x "
+            "UNION "
+            "UNWIND [2, 3, 4] AS x RETURN x"
+        )
+        rows = list(result)
+        values = sorted([r["x"] for r in rows])
+        assert values == [1, 2, 3, 4], f"Expected [1,2,3,4] (deduplicated), got {values}"
+        print(f"  UNION result: {values}")
+        print("  PASS")
+
+        # Test 56: UNION ALL
+        print("\n[Test 56] UNION ALL (with duplicates)")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND [1, 2] AS x RETURN x "
+            "UNION ALL "
+            "UNWIND [2, 3] AS x RETURN x"
+        )
+        rows = list(result)
+        values = sorted([r["x"] for r in rows])
+        assert values == [1, 2, 2, 3], f"Expected [1,2,2,3] (with duplicates), got {values}"
+        print(f"  UNION ALL result: {values}")
+        print("  PASS")
+
+        # Test 57: timestamp()
+        print("\n[Test 57] timestamp()")
+        print("-" * 40)
+        result = session.run("UNWIND [1] AS x RETURN timestamp() AS ts")
+        rows = list(result)
+        ts = rows[0]["ts"]
+        import time as pytime
+        now_ms = int(pytime.time() * 1000)
+        assert abs(ts - now_ms) < 5000, f"timestamp() too far from now: {ts} vs {now_ms}"
+        print(f"  timestamp() = {ts}")
+        print("  PASS")
+
+        # Test 58: date() and datetime()
+        print("\n[Test 58] date() and datetime()")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND [1] AS x "
+            "RETURN date() AS d, datetime() AS dt, date('2024-06-15') AS parsed"
+        )
+        rows = list(result)
+        d = rows[0]["d"]
+        dt = rows[0]["dt"]
+        parsed = rows[0]["parsed"]
+        assert len(d) == 10, f"date() should be YYYY-MM-DD, got {d!r}"
+        assert "T" in dt, f"datetime() should contain T, got {dt!r}"
+        assert parsed == "2024-06-15", f"date('2024-06-15') should return '2024-06-15', got {parsed!r}"
+        print(f"  date() = {d!r}")
+        print(f"  datetime() = {dt!r}")
+        print(f"  date('2024-06-15') = {parsed!r}")
+        print("  PASS")
+
     driver.close()
     print("\n" + "=" * 50)
     print("All tests completed!")

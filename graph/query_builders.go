@@ -1110,6 +1110,47 @@ func evalExpr(expr cypher.Expression, match Match) interface{} {
 				return val != nil
 			}
 			return false
+		case "timestamp":
+			return time.Now().UnixMilli()
+		case "date":
+			if len(e.Arguments) > 0 {
+				if s, ok := evalExpr(e.Arguments[0], match).(string); ok {
+					t, err := time.Parse("2006-01-02", s)
+					if err == nil {
+						return t.Format("2006-01-02")
+					}
+				}
+			}
+			return time.Now().Format("2006-01-02")
+		case "datetime":
+			if len(e.Arguments) > 0 {
+				if s, ok := evalExpr(e.Arguments[0], match).(string); ok {
+					for _, layout := range []string{
+						time.RFC3339,
+						"2006-01-02T15:04:05",
+						"2006-01-02 15:04:05",
+						"2006-01-02",
+					} {
+						t, err := time.Parse(layout, s)
+						if err == nil {
+							return t.Format(time.RFC3339)
+						}
+					}
+					return s // return as-is if unparseable
+				}
+			}
+			return time.Now().Format(time.RFC3339)
+		case "localdatetime":
+			if len(e.Arguments) > 0 {
+				if s, ok := evalExpr(e.Arguments[0], match).(string); ok {
+					return s
+				}
+			}
+			return time.Now().Format("2006-01-02T15:04:05")
+		case "localtime":
+			return time.Now().Format("15:04:05")
+		case "time":
+			return time.Now().Format("15:04:05Z07:00")
 		default:
 			var arg interface{}
 			if len(e.Arguments) > 0 {

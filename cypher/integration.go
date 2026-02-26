@@ -35,6 +35,8 @@ type GraphQuery struct {
 	Pipeline        *GraphPipeline     // set when WITH clause is present
 	IsPathQuery     bool
 	Optional        bool               // true when OPTIONAL MATCH (no-match → one empty row)
+	UnionQueries    []*GraphQuery      // sub-queries for UNION
+	UnionAll        bool               // true for UNION ALL (keep duplicates)
 }
 
 // GraphPipelineStage is one MATCH+WHERE step in a WITH-chained query.
@@ -201,6 +203,22 @@ type GraphRemoveClause struct {
 
 // ConvertToGraphQuery converts the AST to graph-compatible query
 func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
+	// Handle UNION queries
+	if ast.IsUnion {
+		gq := &GraphQuery{
+			QueryType: "UNION",
+			UnionAll:  ast.UnionAll,
+		}
+		for _, sub := range ast.SubQueries {
+			subQuery, err := ConvertToGraphQuery(sub)
+			if err != nil {
+				return nil, err
+			}
+			gq.UnionQueries = append(gq.UnionQueries, subQuery)
+		}
+		return gq, nil
+	}
+
 	// Route to pipeline executor when WITH is present OR multiple MATCH clauses exist
 	matchCount := 0
 	for _, clause := range ast.Clauses {

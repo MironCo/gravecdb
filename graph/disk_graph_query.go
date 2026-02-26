@@ -15,6 +15,8 @@ func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*
 	// For read queries (MATCH without mutations), use in-memory graph
 
 	switch query.QueryType {
+	case "UNION":
+		return g.executeUnionQuery(query, embedder)
 	case "PIPELINE":
 		return g.executePipelineQuery(query, embedder)
 	case "UNWIND":
@@ -69,6 +71,50 @@ func (g *DiskGraph) executeUnwindQuery(query *Query) (*QueryResult, error) {
 		matches = g.filterMatchesUnlocked(matches, query.WhereClause)
 	}
 	return buildResult(matches, query.ReturnClause), nil
+}
+
+// executeUnionQuery runs each sub-query and combines the results.
+func (g *DiskGraph) executeUnionQuery(query *Query, embedder Embedder) (*QueryResult, error) {
+	if len(query.UnionQueries) == 0 {
+		return &QueryResult{}, nil
+	}
+
+	// Execute first sub-query to establish columns
+	first, err := g.ExecuteQueryWithEmbedder(query.UnionQueries[0], embedder)
+	if err != nil {
+		return nil, err
+	}
+
+	combined := &QueryResult{
+		Columns: first.Columns,
+		Rows:    make([]map[string]interface{}, 0, len(first.Rows)),
+	}
+	combined.Rows = append(combined.Rows, first.Rows...)
+
+	// Execute remaining sub-queries
+	for _, sub := range query.UnionQueries[1:] {
+		result, err := g.ExecuteQueryWithEmbedder(sub, embedder)
+		if err != nil {
+			return nil, err
+		}
+		combined.Rows = append(combined.Rows, result.Rows...)
+	}
+
+	// UNION (without ALL) removes duplicate rows
+	if !query.UnionAll {
+		seen := make(map[string]bool)
+		var unique []map[string]interface{}
+		for _, row := range combined.Rows {
+			key := fmt.Sprintf("%v", row)
+			if !seen[key] {
+				seen[key] = true
+				unique = append(unique, row)
+			}
+		}
+		combined.Rows = unique
+	}
+
+	return combined, nil
 }
 
 // executeMergeQuery finds a node matching the pattern; creates it if absent.

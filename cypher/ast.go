@@ -29,7 +29,10 @@ type Clause interface {
 
 // Query represents a complete Cypher query with multiple clauses
 type Query struct {
-	Clauses []Clause
+	Clauses    []Clause
+	IsUnion    bool     // true if this is a UNION query
+	UnionAll   bool     // true for UNION ALL (keep duplicates)
+	SubQueries []*Query // sub-queries joined by UNION
 }
 
 func (q *Query) node()      {}

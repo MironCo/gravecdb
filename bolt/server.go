@@ -253,6 +253,15 @@ func (c *Connection) handleRun(raw *packstream.RawStruct) error {
 		return c.sendIgnored()
 	}
 
+	// Recover from panics during query execution to avoid killing the connection
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("Panic during query execution: %v\n", r)
+			c.failed = true
+			c.sendFailure("Neo.DatabaseError.General.UnknownError", fmt.Sprintf("internal error: %v", r))
+		}
+	}()
+
 	run, err := messages.ParseRun(raw)
 	if err != nil {
 		c.failed = true
@@ -456,6 +465,8 @@ func convertToBoltValue(val interface{}) interface{} {
 		return convertNode(v)
 	case *graph.Relationship:
 		return convertRelationship(v)
+	case *graph.Path:
+		return convertPath(v)
 	case map[string]interface{}:
 		// Check if it's a node-like map
 		if _, hasID := v["ID"]; hasID {
@@ -490,6 +501,26 @@ func convertRelationship(r *graph.Relationship) *messages.Relationship {
 		Type:       r.Type,
 		Properties: r.Properties,
 	}
+}
+
+func convertPath(p *graph.Path) *messages.Path {
+	boltPath := &messages.Path{}
+	for _, n := range p.Nodes {
+		boltPath.Nodes = append(boltPath.Nodes, convertNode(n))
+	}
+	for _, r := range p.Relationships {
+		boltPath.Relationships = append(boltPath.Relationships, &messages.UnboundRelationship{
+			ID:         hashStringID(r.ID),
+			Type:       r.Type,
+			Properties: r.Properties,
+		})
+	}
+	// Build sequence: pairs of (relIndex, nodeIndex) for each step
+	// relIndex is 1-based, nodeIndex is 1-based (index into Nodes after first)
+	for i := range p.Relationships {
+		boltPath.Sequence = append(boltPath.Sequence, int64(i+1), int64(i+1))
+	}
+	return boltPath
 }
 
 func convertNodeMap(m map[string]interface{}) *messages.Node {

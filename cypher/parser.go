@@ -63,23 +63,65 @@ func (p *Parser) expectPeek(t TokenType) bool {
 	return false
 }
 
-// Parse parses a complete Cypher query
+// Parse parses a complete Cypher query, handling UNION between sub-queries
 func (p *Parser) Parse() (*Query, error) {
+	query := p.parseQueryClauses()
+	if len(p.errors) > 0 {
+		return nil, fmt.Errorf("parse errors: %s", strings.Join(p.errors, "; "))
+	}
+
+	// Check for UNION
+	for p.curTokenIs(TOKEN_UNION) {
+		p.nextToken() // consume UNION
+
+		// Check for ALL
+		unionAll := false
+		if p.curTokenIs(TOKEN_ALL) {
+			unionAll = true
+			p.nextToken() // consume ALL
+		}
+
+		// Parse next sub-query
+		right := p.parseQueryClauses()
+		if len(p.errors) > 0 {
+			return nil, fmt.Errorf("parse errors: %s", strings.Join(p.errors, "; "))
+		}
+
+		// Wrap into a union query: first time, wrap the left side too
+		union := &Query{
+			IsUnion:  true,
+			UnionAll: unionAll,
+		}
+		if query.IsUnion {
+			// Already a union — append sub-query
+			union = query
+			union.SubQueries = append(union.SubQueries, right)
+		} else {
+			union.SubQueries = []*Query{query, right}
+			query = union
+		}
+	}
+
+	return query, nil
+}
+
+// parseQueryClauses parses clauses until EOF or UNION
+func (p *Parser) parseQueryClauses() *Query {
 	query := &Query{
 		Clauses: []Clause{},
 	}
 
-	for !p.curTokenIs(TOKEN_EOF) {
+	for !p.curTokenIs(TOKEN_EOF) && !p.curTokenIs(TOKEN_UNION) {
 		clause := p.parseClause()
 		if clause != nil {
 			query.Clauses = append(query.Clauses, clause)
 		}
 		if len(p.errors) > 0 {
-			return nil, fmt.Errorf("parse errors: %s", strings.Join(p.errors, "; "))
+			return query
 		}
 	}
 
-	return query, nil
+	return query
 }
 
 // parseClause parses a single clause
