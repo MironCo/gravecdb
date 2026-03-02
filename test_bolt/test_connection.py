@@ -103,31 +103,49 @@ def main():
         print("\n[Test 7] DURATION(r) - how long each person has worked at their company")
         print("-" * 40)
         result = session.run(
-            "MATCH (p:Person)-[r:WORKS_AT]->(c:Company) RETURN p.name, c.name, DURATION(r) AS tenure_days ORDER BY tenure_days DESC"
+            "MATCH (p:Person)-[r:WORKS_AT]->(c:Company) RETURN p.name AS name, c.name AS company, DURATION(r) AS tenure_days ORDER BY tenure_days DESC"
         )
         rows = list(result)
-        assert len(rows) > 0, "Expected WORKS_AT relationships"
-        for record in rows:
-            days = record["tenure_days"]
-            assert days is not None, f"DURATION returned None for {record['p.name']}"
-            assert days >= 0, f"DURATION returned negative value {days}"
-            print(f"  {record['p.name']} @ {record['c.name']}: {days:.2f} days")
-        print(f"  PASS ({len(rows)} rows)")
+        assert len(rows) >= 13, f"Expected >= 13 WORKS_AT relationships, got {len(rows)}"
+        names_seen = {r["name"] for r in rows}
+        # All 13 people should have a current WORKS_AT
+        for person in ["Alice", "Bob", "Carol", "David", "Eve", "Frank", "Grace", "Henry", "Isabel", "Jack", "Kate", "Liam", "Maya"]:
+            assert person in names_seen, f"{person} missing from WORKS_AT results"
+        # Verify ordering: DESC means first row has largest duration
+        durations = [r["tenure_days"] for r in rows]
+        for i in range(len(durations) - 1):
+            assert durations[i] >= durations[i+1], f"Not sorted DESC: {durations[i]} < {durations[i+1]}"
+        # All durations should be positive (seed data created before test runs)
+        for r in rows:
+            assert r["tenure_days"] > 0, f"DURATION should be > 0 for {r['name']}, got {r['tenure_days']}"
+        print(f"  {len(rows)} WORKS_AT relationships, all durations > 0, sorted DESC")
+        print(f"  Longest tenure: {rows[0]['name']} @ {rows[0]['company']} ({durations[0]:.4f} days)")
+        print("  PASS")
 
         # Test 8: DURATION on nodes
         print("\n[Test 8] DURATION(p) - how long each Person node has existed")
         print("-" * 40)
         result = session.run(
-            "MATCH (p:Person) RETURN p.name, DURATION(p) AS age_days ORDER BY age_days DESC"
+            "MATCH (p:Person) RETURN p.name AS name, DURATION(p) AS age_days ORDER BY age_days DESC"
         )
         rows = list(result)
-        assert len(rows) > 0, "Expected Person nodes"
-        for record in rows:
-            days = record["age_days"]
-            assert days is not None, f"DURATION returned None for {record['p.name']}"
-            assert days >= 0, f"DURATION returned negative value {days}"
-            print(f"  {record['p.name']}: {days:.4f} days old")
-        print(f"  PASS ({len(rows)} rows)")
+        assert len(rows) >= 13, f"Expected >= 13 Person nodes, got {len(rows)}"
+        names_seen = {r["name"] for r in rows}
+        for person in ["Alice", "Bob", "Carol", "David", "Eve", "Frank", "Grace", "Henry", "Isabel", "Jack", "Kate", "Liam", "Maya"]:
+            assert person in names_seen, f"{person} missing from Person DURATION results"
+        # Verify ordering: DESC means oldest nodes first
+        durations = [r["age_days"] for r in rows]
+        for i in range(len(durations) - 1):
+            assert durations[i] >= durations[i+1], f"Not sorted DESC: {durations[i]} < {durations[i+1]}"
+        # All durations should be positive
+        for r in rows:
+            assert r["age_days"] > 0, f"DURATION should be > 0 for {r['name']}, got {r['age_days']}"
+        # Oldest node should be one of the original seed persons
+        seed_names = {"Alice", "Bob", "Carol", "David", "Eve", "Frank", "Grace", "Henry", "Isabel", "Jack", "Kate", "Liam", "Maya"}
+        assert rows[0]["name"] in seed_names, f"Expected oldest node to be a seed person, got {rows[0]['name']}"
+        print(f"  {len(rows)} Person nodes, all durations > 0, sorted DESC")
+        print(f"  Oldest: {rows[0]['name']} ({durations[0]:.4f} days)")
+        print("  PASS")
 
         # Test 9: SIMILAR TO semantic search (top-level, not WHERE)
         print("\n[Test 9] SIMILAR TO - semantic search for 'software engineer'")
@@ -173,8 +191,8 @@ def main():
                 raise
 
         # Test 11: earliestPath — temporal Dijkstra between two people
-        # Seed data has directed paths via FRIENDS_WITH, COLLABORATES, etc.
-        # Bob->David (FRIENDS_WITH), Eve->Bob (COLLABORATES), etc.
+        # Seed data has: Alice->Bob (FRIENDS_WITH, created then deleted),
+        # Alice->Carol (REPORTS_TO), Carol->Eve (FRIENDS_WITH), Eve->Bob (COLLABORATES)
         print("\n[Test 11] earliestPath — temporal Dijkstra")
         print("-" * 40)
         result = session.run(
@@ -182,12 +200,35 @@ def main():
         )
         rows = list(result)
         assert len(rows) >= 1, f"Expected at least 1 path from Alice to Bob, got {len(rows)}"
+        path = rows[0]["p"]
         arrival = rows[0]["arrival_time"]
+        # Verify path starts at Alice and ends at Bob
+        path_nodes = list(path.nodes)
+        assert len(path_nodes) >= 2, f"Path should have at least 2 nodes, got {len(path_nodes)}"
+        start_props = dict(path_nodes[0])
+        end_props = dict(path_nodes[-1])
+        assert start_props.get("name") == "Alice", f"Path should start at Alice, got {start_props}"
+        assert end_props.get("name") == "Bob", f"Path should end at Bob, got {end_props}"
+        # Verify arrival_time is a valid RFC3339 datetime
         assert arrival is not None, "arrival_time should not be None"
         assert isinstance(arrival, str), f"arrival_time should be a string, got {type(arrival)}"
-        assert "T" in arrival, f"arrival_time should be RFC3339 format, got {arrival!r}"
-        print(f"  earliest arrival: {arrival}")
-        print(f"  PASS ({len(rows)} paths)")
+        from datetime import datetime as dt_parser
+        try:
+            parsed_arrival = dt_parser.fromisoformat(arrival.replace("Z", "+00:00"))
+        except ValueError:
+            raise AssertionError(f"arrival_time is not valid ISO format: {arrival!r}")
+        # arrival_time should be in the past and within the last 24 hours
+        # (server may have been running for a while with persisted seed data)
+        from datetime import timezone
+        arrival_utc = parsed_arrival.astimezone(timezone.utc) if parsed_arrival.tzinfo else parsed_arrival
+        now_utc = dt_parser.now(timezone.utc)
+        diff_seconds = (now_utc - arrival_utc).total_seconds()
+        assert diff_seconds >= 0, f"arrival_time {arrival} is in the future"
+        assert diff_seconds < 86400, f"arrival_time {arrival} is more than 24 hours old ({diff_seconds:.0f}s)"
+        print(f"  Path: {' -> '.join(dict(n).get('name', '?') for n in path_nodes)}")
+        print(f"  Earliest arrival: {arrival}")
+        print(f"  {len(path.relationships)} relationships in path")
+        print("  PASS")
 
         # Test 12: UNWIND - expand list into rows
         print("\n[Test 12] UNWIND ['Alice', 'Bob', 'Charlie'] AS name RETURN name")
@@ -915,13 +956,30 @@ def main():
         )
         rows = list(result)
         d = rows[0]["d"]
-        dt = rows[0]["dt"]
+        dt_val = rows[0]["dt"]
         parsed = rows[0]["parsed"]
-        assert len(d) == 10, f"date() should be YYYY-MM-DD, got {d!r}"
-        assert "T" in dt, f"datetime() should contain T, got {dt!r}"
+        # Verify date() returns today's date in YYYY-MM-DD format
+        from datetime import date as date_cls, datetime as datetime_cls
+        today_str = date_cls.today().isoformat()
+        assert d == today_str, f"date() should be today ({today_str}), got {d!r}"
+        # Verify datetime() is a valid ISO datetime close to now
+        try:
+            parsed_dt = datetime_cls.fromisoformat(dt_val.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            raise AssertionError(f"datetime() is not valid ISO format: {dt_val!r}")
+        # Should be within 60 seconds of now (compare in UTC to handle timezones)
+        from datetime import timezone as tz
+        if parsed_dt.tzinfo:
+            parsed_utc = parsed_dt.astimezone(tz.utc)
+        else:
+            parsed_utc = parsed_dt.replace(tzinfo=tz.utc)
+        now_utc = datetime_cls.now(tz.utc)
+        diff = abs((now_utc - parsed_utc).total_seconds())
+        assert diff < 60, f"datetime() is {diff:.0f}s from now, expected < 60s"
+        # Verify parsed date literal
         assert parsed == "2024-06-15", f"date('2024-06-15') should return '2024-06-15', got {parsed!r}"
-        print(f"  date() = {d!r}")
-        print(f"  datetime() = {dt!r}")
+        print(f"  date() = {d!r} (matches today: {today_str})")
+        print(f"  datetime() = {dt_val!r} (within {diff:.1f}s of now)")
         print(f"  date('2024-06-15') = {parsed!r}")
         print("  PASS")
 
