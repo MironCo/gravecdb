@@ -78,6 +78,7 @@ type GraphQuery struct {
 	UnionQueries    []*GraphQuery      // sub-queries for UNION
 	UnionAll        bool               // true for UNION ALL (keep duplicates)
 	Parameters      map[string]interface{} // query parameters ($name -> value)
+	CallClause      *GraphCallClause
 }
 
 // GraphPipelineStage is one MATCH+WHERE step in a WITH-chained query.
@@ -244,6 +245,12 @@ type GraphForeachClause struct {
 	Updates  []*SetItem  // SET operations to apply
 }
 
+type GraphCallClause struct {
+	Procedure  string
+	Config     map[string]interface{}
+	YieldItems []string
+}
+
 type GraphRemoveItem struct {
 	Variable string
 	Property string // set for REMOVE n.property
@@ -396,6 +403,22 @@ func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
 				ListExpr: c.List,
 				Updates:  c.Updates,
 			}
+
+		case *CallClause:
+			gq.QueryType = "CALL"
+			gc := &GraphCallClause{
+				Procedure:  strings.ToLower(c.Procedure),
+				YieldItems: c.YieldItems,
+				Config:     make(map[string]interface{}),
+			}
+			if c.Config != nil {
+				if mapLit, ok := c.Config.(*MapLiteral); ok {
+					for _, pair := range mapLit.Pairs {
+						gc.Config[pair.Key] = extractExprValue(pair.Value)
+					}
+				}
+			}
+			gq.CallClause = gc
 		}
 	}
 

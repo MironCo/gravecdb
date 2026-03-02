@@ -173,6 +173,8 @@ func (p *Parser) parseClause() Clause {
 		return p.parseEmbedClause()
 	case TOKEN_SIMILAR:
 		return p.parseSimilarToClause()
+	case TOKEN_CALL:
+		return p.parseCallClause()
 	default:
 		p.addError("unexpected token: %s", p.curToken.Literal)
 		p.nextToken()
@@ -1504,6 +1506,48 @@ func (p *Parser) parseForeachClause() *ForeachClause {
 		return nil
 	}
 	p.nextToken() // consume )
+
+	return clause
+}
+
+// parseCallClause parses CALL procedure([config]) YIELD var1, var2, ...
+func (p *Parser) parseCallClause() *CallClause {
+	clause := &CallClause{}
+	p.nextToken() // consume CALL
+
+	// Parse procedure name (may be a keyword like "pageRank" — treat any token as name)
+	clause.Procedure = p.curToken.Literal
+	p.nextToken()
+
+	// Parse optional arguments: (config)
+	if p.curTokenIs(TOKEN_LPAREN) {
+		p.nextToken() // consume (
+		if !p.curTokenIs(TOKEN_RPAREN) {
+			clause.Config = p.parseExpression(LOWEST)
+		}
+		if !p.curTokenIs(TOKEN_RPAREN) {
+			p.addError("expected ) after CALL arguments")
+			return nil
+		}
+		p.nextToken() // consume )
+	}
+
+	// Parse YIELD
+	if !p.curTokenIs(TOKEN_YIELD) {
+		p.addError("expected YIELD after CALL procedure")
+		return nil
+	}
+	p.nextToken() // consume YIELD
+
+	// Parse comma-separated yield variables
+	for {
+		clause.YieldItems = append(clause.YieldItems, p.curToken.Literal)
+		p.nextToken()
+		if !p.curTokenIs(TOKEN_COMMA) {
+			break
+		}
+		p.nextToken() // consume comma
+	}
 
 	return clause
 }

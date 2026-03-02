@@ -538,3 +538,13 @@ type Star struct{}
 
 func (s *Star) node()       {}
 func (s *Star) expression() {}
+
+// CallClause represents CALL procedure() YIELD ...
+type CallClause struct {
+	Procedure  string
+	Config     Expression // optional map literal config
+	YieldItems []string   // variable names to yield
+}
+
+func (c *CallClause) node()   {}
+func (c *CallClause) clause() {}

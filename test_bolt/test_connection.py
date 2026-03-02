@@ -16,49 +16,88 @@ def main():
     print("=" * 50)
 
     with driver.session() as session:
-        # Test 1: Get all Person nodes
+        # Test 1: Get all Person nodes — verify seed data present
         print("\n[Test 1] MATCH (n:Person) RETURN n")
         print("-" * 40)
         result = session.run("MATCH (n:Person) RETURN n")
-        for record in result:
-            node = record["n"]
-            print(f"  Node: {node}")
+        rows = list(result)
+        names = {dict(r["n"]).get("name") for r in rows}
+        seed_people = {"Alice", "Bob", "Carol", "David", "Eve", "Frank",
+                       "Grace", "Henry", "Isabel", "Jack", "Kate", "Liam", "Maya"}
+        assert seed_people.issubset(names), f"Missing seed people: {seed_people - names}"
+        assert len(rows) >= 13, f"Expected at least 13 Person nodes, got {len(rows)}"
+        print(f"  Found {len(rows)} Person nodes (seed: {len(seed_people)} present)")
+        print("  PASS")
 
-        # Test 2: Get all Company nodes
+        # Test 2: Get all Company nodes — verify 3 seed companies
         print("\n[Test 2] MATCH (n:Company) RETURN n")
         print("-" * 40)
         result = session.run("MATCH (n:Company) RETURN n")
-        for record in result:
-            node = record["n"]
-            print(f"  Node: {node}")
+        rows = list(result)
+        co_names = {dict(r["n"]).get("name") for r in rows}
+        assert co_names >= {"TechCorp", "CoolStartup", "BigCo"}, f"Missing seed companies: {co_names}"
+        assert len(rows) >= 3, f"Expected at least 3 Company nodes, got {len(rows)}"
+        print(f"  Found {len(rows)} Company nodes: {sorted(co_names)}")
+        print("  PASS")
 
-        # Test 3: Get specific properties
+        # Test 3: Get specific properties — verify p.name returns strings
         print("\n[Test 3] MATCH (p:Person) RETURN p.name")
         print("-" * 40)
         result = session.run("MATCH (p:Person) RETURN p.name")
-        for record in result:
-            print(f"  Name: {record['p.name']}")
+        rows = list(result)
+        names = [r["p.name"] for r in rows]
+        assert len(names) >= 13, f"Expected at least 13 names, got {len(names)}"
+        assert all(isinstance(n, str) for n in names), f"All names should be strings"
+        assert "Alice" in names, f"Expected 'Alice' in results, got {names}"
+        assert "Bob" in names, f"Expected 'Bob' in results, got {names}"
+        print(f"  Found {len(names)} names, includes Alice and Bob")
+        print("  PASS")
 
-        # Test 4: Relationships
-        print("\n[Test 4] MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a, r, b")
+        # Test 4: Relationships — REPORTS_TO exists in seed data
+        print("\n[Test 4] MATCH (a:Person)-[r:REPORTS_TO]->(b:Person) RETURN a.name, b.name")
         print("-" * 40)
-        result = session.run("MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a, r, b")
-        for record in result:
-            print(f"  {record['a']} -[KNOWS]-> {record['b']}")
+        result = session.run("MATCH (a:Person)-[r:REPORTS_TO]->(b:Person) RETURN a.name AS sub, b.name AS mgr")
+        rows = list(result)
+        pairs = {(r["sub"], r["mgr"]) for r in rows}
+        assert len(rows) >= 4, f"Expected at least 4 REPORTS_TO relationships, got {len(rows)}"
+        assert ("Alice", "Carol") in pairs, f"Expected Alice->Carol reporting, got {pairs}"
+        assert ("Henry", "Carol") in pairs, f"Expected Henry->Carol reporting, got {pairs}"
+        assert ("Liam", "Jack") in pairs, f"Expected Liam->Jack reporting, got {pairs}"
+        assert ("Maya", "Kate") in pairs, f"Expected Maya->Kate reporting, got {pairs}"
+        for r in rows:
+            print(f"  {r['sub']} -[REPORTS_TO]-> {r['mgr']}")
+        print("  PASS")
 
-        # Test 5: Create a node (clean up first so test is idempotent across runs)
+        # Test 5: Create a node and verify it returns data
         print("\n[Test 5] CREATE (p:Person {name: 'BoltTest', age: 99})")
         print("-" * 40)
-        session.run("MATCH (p:Person {name: 'BoltTest'}) DELETE p")
-        result = session.run("CREATE (p:Person {name: 'BoltTest', age: 99})")
-        print("  Node created!")
+        session.run("MATCH (p:Person {name: 'BoltTest'}) DELETE p").consume()
+        session.run("CREATE (p:Person {name: 'BoltTest', age: 99})").consume()
+        # Verify the node actually exists now
+        result = session.run("MATCH (p:Person {name: 'BoltTest'}) RETURN p.name AS name, p.age AS age")
+        rows = list(result)
+        assert len(rows) >= 1, f"Expected at least 1 BoltTest node after CREATE, got {len(rows)}"
+        assert rows[0]["name"] == "BoltTest", f"Expected name='BoltTest', got {rows[0]['name']}"
+        assert rows[0]["age"] == 99, f"Expected age=99, got {rows[0]['age']}"
+        print(f"  Created and verified: name={rows[0]['name']}, age={rows[0]['age']}")
+        print("  PASS")
 
-        # Test 6: Verify the created node
+        # Test 6: Verify property match filtering works
         print("\n[Test 6] MATCH (p:Person {name: 'BoltTest'}) RETURN p")
         print("-" * 40)
         result = session.run("MATCH (p:Person {name: 'BoltTest'}) RETURN p")
-        for record in result:
-            print(f"  Found: {record['p']}")
+        rows = list(result)
+        assert len(rows) >= 1, f"Expected at least 1 row, got {len(rows)}"
+        props = dict(rows[0]["p"])
+        assert props["name"] == "BoltTest", f"Expected name='BoltTest', got {props}"
+        assert props["age"] == 99, f"Expected age=99 in properties, got {props}"
+        # Verify it doesn't match wrong name
+        result2 = session.run("MATCH (p:Person {name: 'NonExistent_XYZ_12345'}) RETURN p")
+        rows2 = list(result2)
+        assert len(rows2) == 0, f"Expected 0 rows for non-existent name, got {len(rows2)}"
+        print(f"  Found: {props}")
+        print(f"  Non-existent filter correctly returns 0 rows")
+        print("  PASS")
 
         # Test 7: DURATION on relationships
         print("\n[Test 7] DURATION(r) - how long each person has worked at their company")
@@ -133,24 +172,22 @@ def main():
             else:
                 raise
 
-        # Test 11: earliestPath - earliest arrival path between two specific people
-        print("\n[Test 11] earliestPath((a:Person {name:'Alice'})-[*]->(b:Person {name:'Bob'})) - temporal Dijkstra")
+        # Test 11: earliestPath — temporal Dijkstra between two people
+        # Seed data has directed paths via FRIENDS_WITH, COLLABORATES, etc.
+        # Bob->David (FRIENDS_WITH), Eve->Bob (COLLABORATES), etc.
+        print("\n[Test 11] earliestPath — temporal Dijkstra")
         print("-" * 40)
-        try:
-            result = session.run(
-                "MATCH p = earliestPath((a:Person {name: 'Alice'})-[*]->(b:Person {name: 'Bob'})) RETURN p, arrival_time"
-            )
-            rows = list(result)
-            if len(rows) == 0:
-                print("  SKIP (no directed path from Alice to Bob)")
-            else:
-                for record in rows:
-                    arrival = record["arrival_time"]
-                    assert arrival is not None, "arrival_time should not be None"
-                    print(f"  earliest arrival: {arrival}")
-                print(f"  PASS ({len(rows)} rows)")
-        except Exception as e:
-            print(f"  SKIP (earliestPath not available for this dataset: {e})")
+        result = session.run(
+            "MATCH p = earliestPath((a:Person {name: 'Alice'})-[*]->(b:Person {name: 'Bob'})) RETURN p, arrival_time"
+        )
+        rows = list(result)
+        assert len(rows) >= 1, f"Expected at least 1 path from Alice to Bob, got {len(rows)}"
+        arrival = rows[0]["arrival_time"]
+        assert arrival is not None, "arrival_time should not be None"
+        assert isinstance(arrival, str), f"arrival_time should be a string, got {type(arrival)}"
+        assert "T" in arrival, f"arrival_time should be RFC3339 format, got {arrival!r}"
+        print(f"  earliest arrival: {arrival}")
+        print(f"  PASS ({len(rows)} paths)")
 
         # Test 12: UNWIND - expand list into rows
         print("\n[Test 12] UNWIND ['Alice', 'Bob', 'Charlie'] AS name RETURN name")
@@ -245,21 +282,25 @@ def main():
         assert by_val["olleh"]["rev"] == "olleh", "reverse of 'hello' should be 'olleh'"
         print(f"  PASS ({len(rows)} rows)")
 
-        # Test 18: WITH clause — friends-of-friends style chained MATCH
+        # Test 18: WITH clause — chained MATCH via WITH
+        # Use REPORTS_TO + WORKS_AT (both exist in seed data)
+        # Alice->Carol (REPORTS_TO), Carol->TechCorp (WORKS_AT)
         print("\n[Test 18] WITH clause — chained MATCH via WITH")
         print("-" * 40)
         result = session.run(
-            "MATCH (a:Person)-[:KNOWS]->(b:Person) WITH b MATCH (b)-[:WORKS_AT]->(c:Company) RETURN b.name AS person, c.name AS company"
+            "MATCH (a:Person)-[:REPORTS_TO]->(mgr:Person) "
+            "WITH mgr "
+            "MATCH (mgr)-[:WORKS_AT]->(c:Company) "
+            "RETURN mgr.name AS manager, c.name AS company ORDER BY manager"
         )
         rows = list(result)
-        if len(rows) == 0:
-            print("  SKIP (no Person-KNOWS-Person-WORKS_AT-Company paths in dataset)")
-        else:
-            for r in rows:
-                assert r["person"] is not None, "person should not be None"
-                assert r["company"] is not None, "company should not be None"
-                print(f"  {r['person']} works at {r['company']}")
-            print(f"  PASS ({len(rows)} rows)")
+        assert len(rows) >= 4, f"Expected at least 4 rows (4 REPORTS_TO), got {len(rows)}"
+        pairs = {(r["manager"], r["company"]) for r in rows}
+        # Carol manages Alice and Henry, works at TechCorp
+        assert ("Carol", "TechCorp") in pairs, f"Expected Carol at TechCorp, got {pairs}"
+        for r in rows:
+            print(f"  Manager {r['manager']} works at {r['company']}")
+        print("  PASS")
 
         # Test 19: WHERE with scalar function — toUpper(p.name) = 'ALICE'
         print("\n[Test 19] WHERE function: toUpper(p.name) = 'ALICE'")
@@ -442,20 +483,19 @@ def main():
         print(f"  labels(p) = {lbls}")
         print("  PASS")
 
-        # Test 32: type(r) — relationship type introspection
+        # Test 32: type(r) — relationship type introspection (uses REPORTS_TO from seed data)
         print("\n[Test 32] type(r) — relationship type introspection")
         print("-" * 40)
         result = session.run(
-            "MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN type(r) AS t LIMIT 1"
+            "MATCH (a:Person {name: 'Alice'})-[r:REPORTS_TO]->(b:Person) RETURN type(r) AS t, b.name AS mgr"
         )
         rows = list(result)
-        if len(rows) == 0:
-            print("  SKIP (no KNOWS relationships in dataset)")
-        else:
-            t = rows[0]["t"]
-            assert t == "KNOWS", f"Expected 'KNOWS', got {t!r}"
-            print(f"  type(r) = {t!r}")
-            print("  PASS")
+        assert len(rows) >= 1, f"Expected at least 1 REPORTS_TO from Alice, got {len(rows)}"
+        t = rows[0]["t"]
+        assert t == "REPORTS_TO", f"Expected 'REPORTS_TO', got {t!r}"
+        assert rows[0]["mgr"] == "Carol", f"Expected Alice reports to Carol, got {rows[0]['mgr']!r}"
+        print(f"  type(r) = {t!r}, Alice reports to {rows[0]['mgr']}")
+        print("  PASS")
 
         # Test 33: keys(n) — property key introspection
         print("\n[Test 33] keys(n) — property key introspection")
@@ -732,22 +772,27 @@ def main():
         print(f"  round(cos(0)*100) = {rows[0]['c']}")
         print("  PASS")
 
-        # Test 49: startNode / endNode
+        # Test 49: startNode / endNode — verify they return correct node IDs
         print("\n[Test 49] startNode(r) and endNode(r)")
         print("-" * 40)
+        # Compare startNode(r) to id(a) — both return raw UUIDs before Bolt encoding
         result = session.run(
             "MATCH (a:VLPTest {name: 'VLP_A'})-[r:KNOWS]->(b:VLPTest {name: 'VLP_B'}) "
-            "RETURN startNode(r) AS sn, endNode(r) AS en"
+            "RETURN startNode(r) AS sn, endNode(r) AS en, id(a) AS aid, id(b) AS bid"
         )
         rows = list(result)
-        if len(rows) == 0:
-            print("  SKIP (no VLP data)")
-        else:
-            assert rows[0]["sn"] is not None, f"startNode returned None"
-            assert rows[0]["en"] is not None, f"endNode returned None"
-            print(f"  startNode(r) = {rows[0]['sn']!r}")
-            print(f"  endNode(r) = {rows[0]['en']!r}")
-            print("  PASS")
+        assert len(rows) >= 1, f"Expected VLP_A->VLP_B KNOWS relationship, got {len(rows)} rows"
+        sn = rows[0]["sn"]
+        en = rows[0]["en"]
+        aid = rows[0]["aid"]
+        bid = rows[0]["bid"]
+        assert sn is not None, "startNode returned None"
+        assert en is not None, "endNode returned None"
+        assert sn == aid, f"startNode(r) should match id(a): {sn} != {aid}"
+        assert en == bid, f"endNode(r) should match id(b): {en} != {bid}"
+        print(f"  startNode(r) = {sn!r}, id(a) = {aid!r}")
+        print(f"  endNode(r) = {en!r}, id(b) = {bid!r}")
+        print("  PASS")
 
         # Test 50: EXISTS(n.property)
         print("\n[Test 50] EXISTS(n.property)")
@@ -1071,6 +1116,117 @@ def main():
         assert rows[0]["created"] == True, f"Expected created=true (unchanged), got {rows[0]['created']}"
         assert rows[0]["counter"] == 999, f"Expected counter=999, got {rows[0]['counter']}"
         print(f"  After second MERGE: created={rows[0]['created']}, counter={rows[0]['counter']}")
+        print("  PASS")
+
+        # Test 70: PageRank — star graph, hub should have highest score
+        print("\n[Test 70] PageRank — star graph")
+        print("-" * 40)
+        session.run("MATCH (pr:PRTest) DETACH DELETE pr").consume()
+        session.run("CREATE (h:PRTest {name: 'hub'})").consume()
+        for i in range(5):
+            session.run(
+                f"CREATE (l:PRTest {{name: 'leaf{i}'}})"
+            ).consume()
+            session.run(
+                f"MATCH (h:PRTest {{name: 'hub'}}), (l:PRTest {{name: 'leaf{i}'}}) "
+                f"CREATE (l)-[:LINKS]->(h)"
+            ).consume()
+        result = session.run(
+            "CALL pageRank({label: 'PRTest'}) YIELD node, score "
+            "RETURN node.name AS name, score ORDER BY score DESC"
+        )
+        rows = list(result)
+        assert len(rows) == 6, f"Expected 6 rows, got {len(rows)}"
+        assert rows[0]["name"] == "hub", f"Expected hub first, got {rows[0]['name']}"
+        print(f"  Top node: {rows[0]['name']} (score={rows[0]['score']:.4f})")
+        print(f"  Total nodes ranked: {len(rows)}")
+        print("  PASS")
+
+        # Test 71: PageRank with label filter — verify filtering excludes other nodes
+        # Run pageRank WITHOUT label filter and WITH label filter, compare counts
+        print("\n[Test 71] PageRank with label filter excludes non-matching nodes")
+        print("-" * 40)
+        result_all = session.run(
+            "CALL pageRank() YIELD node, score RETURN node.name AS name, score"
+        )
+        all_rows = list(result_all)
+        result_filtered = session.run(
+            "CALL pageRank({label: 'PRTest'}) YIELD node, score RETURN node.name AS name, score"
+        )
+        filtered_rows = list(result_filtered)
+        assert len(all_rows) > len(filtered_rows), \
+            f"Unfiltered ({len(all_rows)}) should have more nodes than filtered ({len(filtered_rows)})"
+        assert len(filtered_rows) == 6, f"Expected 6 PRTest nodes, got {len(filtered_rows)}"
+        filtered_names = {r["name"] for r in filtered_rows}
+        expected = {"hub", "leaf0", "leaf1", "leaf2", "leaf3", "leaf4"}
+        assert filtered_names == expected, f"Expected {expected}, got {filtered_names}"
+        print(f"  Unfiltered: {len(all_rows)} nodes, Filtered (PRTest): {len(filtered_rows)} nodes")
+        print(f"  Filter correctly excludes {len(all_rows) - len(filtered_rows)} non-PRTest nodes")
+        print("  PASS")
+
+        # Test 72: Louvain — two disconnected cliques should form 2 communities
+        print("\n[Test 72] Louvain — two disconnected cliques")
+        print("-" * 40)
+        session.run("MATCH (lv:LVTest) DETACH DELETE lv").consume()
+        # Clique A: a1-a2-a3 fully connected
+        for i in range(1, 4):
+            session.run(f"CREATE (:LVTest {{name: 'a{i}'}})").consume()
+        session.run(
+            "MATCH (x:LVTest {name: 'a1'}), (y:LVTest {name: 'a2'}) CREATE (x)-[:CONN]->(y)"
+        ).consume()
+        session.run(
+            "MATCH (x:LVTest {name: 'a2'}), (y:LVTest {name: 'a3'}) CREATE (x)-[:CONN]->(y)"
+        ).consume()
+        session.run(
+            "MATCH (x:LVTest {name: 'a1'}), (y:LVTest {name: 'a3'}) CREATE (x)-[:CONN]->(y)"
+        ).consume()
+        # Clique B: b1-b2-b3 fully connected
+        for i in range(1, 4):
+            session.run(f"CREATE (:LVTest {{name: 'b{i}'}})").consume()
+        session.run(
+            "MATCH (x:LVTest {name: 'b1'}), (y:LVTest {name: 'b2'}) CREATE (x)-[:CONN]->(y)"
+        ).consume()
+        session.run(
+            "MATCH (x:LVTest {name: 'b2'}), (y:LVTest {name: 'b3'}) CREATE (x)-[:CONN]->(y)"
+        ).consume()
+        session.run(
+            "MATCH (x:LVTest {name: 'b1'}), (y:LVTest {name: 'b3'}) CREATE (x)-[:CONN]->(y)"
+        ).consume()
+        result = session.run(
+            "CALL louvain({label: 'LVTest'}) YIELD node, community "
+            "RETURN node.name AS name, community ORDER BY name"
+        )
+        rows = list(result)
+        assert len(rows) == 6, f"Expected 6 rows, got {len(rows)}"
+        # a-nodes should share one community, b-nodes another
+        a_comms = set(r["community"] for r in rows if r["name"].startswith("a"))
+        b_comms = set(r["community"] for r in rows if r["name"].startswith("b"))
+        assert len(a_comms) == 1, f"a-nodes should be in 1 community, got {a_comms}"
+        assert len(b_comms) == 1, f"b-nodes should be in 1 community, got {b_comms}"
+        assert a_comms != b_comms, f"Cliques should be in different communities"
+        print(f"  Clique A community: {a_comms.pop()}")
+        print(f"  Clique B community: {b_comms.pop()}")
+        print("  PASS")
+
+        # Test 73: Louvain with label filter — verify filtering excludes other nodes
+        print("\n[Test 73] Louvain with label filter excludes non-matching nodes")
+        print("-" * 40)
+        result_all = session.run(
+            "CALL louvain() YIELD node, community RETURN node.name AS name, community"
+        )
+        all_rows = list(result_all)
+        result_filtered = session.run(
+            "CALL louvain({label: 'LVTest'}) YIELD node, community RETURN node.name AS name, community"
+        )
+        filtered_rows = list(result_filtered)
+        assert len(all_rows) > len(filtered_rows), \
+            f"Unfiltered ({len(all_rows)}) should have more nodes than filtered ({len(filtered_rows)})"
+        assert len(filtered_rows) == 6, f"Expected 6 LVTest nodes, got {len(filtered_rows)}"
+        filtered_names = {r["name"] for r in filtered_rows}
+        expected = {"a1", "a2", "a3", "b1", "b2", "b3"}
+        assert filtered_names == expected, f"Expected {expected}, got {filtered_names}"
+        print(f"  Unfiltered: {len(all_rows)} nodes, Filtered (LVTest): {len(filtered_rows)} nodes")
+        print(f"  Filter correctly excludes {len(all_rows) - len(filtered_rows)} non-LVTest nodes")
         print("  PASS")
 
     driver.close()

@@ -51,6 +51,7 @@ type RemoveItem = cypher.GraphRemoveItem
 type EmbedClause = cypher.GraphEmbedClause
 type SimilarToClause = cypher.GraphSimilarToClause
 type ForeachClause = cypher.GraphForeachClause
+type CallClause = cypher.GraphCallClause
 type GraphSemanticCondition = cypher.GraphSemanticCondition
 
 // valuesEqual compares two values for equality, handling type differences

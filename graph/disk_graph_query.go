@@ -1,7 +1,6 @@
 package graph
 
 import (
-	"container/heap"
 	"fmt"
 	"strings"
 	"time"
@@ -37,6 +36,8 @@ func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*
 		return g.executeMergeQuery(query)
 	case "CREATE":
 		return g.executeCreateQuery(query)
+	case "CALL":
+		return g.executeCallQuery(query)
 	case "MATCH":
 		// Check for FOREACH first (MATCH ... FOREACH)
 		if query.ForeachClause != nil {
@@ -64,6 +65,34 @@ func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*
 	default:
 		return nil, fmt.Errorf("unsupported query type: %s", query.QueryType)
 	}
+}
+
+// executeCallQuery handles CALL procedure() YIELD ... queries.
+func (g *DiskGraph) executeCallQuery(query *Query) (*QueryResult, error) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	cc := query.CallClause
+	if cc == nil {
+		return nil, fmt.Errorf("CALL clause is nil")
+	}
+
+	var matches []Match
+	var err error
+
+	switch cc.Procedure {
+	case "pagerank":
+		matches, err = g.computePageRank(cc.Config)
+	case "louvain":
+		matches, err = g.computeLouvain(cc.Config)
+	default:
+		return nil, fmt.Errorf("unknown procedure: %s", cc.Procedure)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return buildResult(matches, query.ReturnClause), nil
 }
 
 // executeUnwindQuery expands a list literal into rows and applies RETURN.
@@ -728,29 +757,6 @@ func (g *DiskGraph) executePathQueryUnlocked(query *Query) (*QueryResult, error)
 // Earliest arrival path — temporal Dijkstra
 // ============================================================================
 
-// earliestHeapItem is one entry in the Dijkstra priority queue.
-type earliestHeapItem struct {
-	arrivalTime time.Time
-	nodeID      string
-}
-
-type earliestHeap []earliestHeapItem
-
-func (h earliestHeap) Len() int            { return len(h) }
-func (h earliestHeap) Less(i, j int) bool  { return h[i].arrivalTime.Before(h[j].arrivalTime) }
-func (h earliestHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
-func (h *earliestHeap) Push(x interface{}) { *h = append(*h, x.(earliestHeapItem)) }
-func (h *earliestHeap) Pop() interface{} {
-	old := *h
-	item := old[len(old)-1]
-	*h = old[:len(old)-1]
-	return item
-}
-
-type earliestParent struct {
-	rel        *Relationship
-	previousID string
-}
 
 // executeEarliestPathUnlocked runs earliestPath() — finds the temporally earliest route
 // from startNode to endNode by treating arrival_time as the Dijkstra cost.
@@ -807,282 +813,7 @@ func (g *DiskGraph) executeEarliestPathUnlocked(query *Query) (*QueryResult, err
 	return result, nil
 }
 
-// earliestPathDijkstra finds the path from fromID to toID that minimises arrival time.
-// Cost of traversing a relationship = max(current_arrival_time, rel.ValidFrom).
-func earliestPathDijkstra(
-	allNodes map[string]*Node,
-	relsByNode map[string][]*Relationship,
-	fromID, toID string,
-) (*Path, time.Time) {
-	startNode, ok := allNodes[fromID]
-	if !ok {
-		return nil, time.Time{}
-	}
 
-	dist := make(map[string]time.Time)
-	parent := make(map[string]*earliestParent)
-
-	h := &earliestHeap{}
-	heap.Init(h)
-
-	dist[fromID] = startNode.ValidFrom
-	heap.Push(h, earliestHeapItem{arrivalTime: startNode.ValidFrom, nodeID: fromID})
-
-	for h.Len() > 0 {
-		cur := heap.Pop(h).(earliestHeapItem)
-		nodeID := cur.nodeID
-		t := cur.arrivalTime
-
-		// Stale entry — already found a better path to this node
-		if best, ok := dist[nodeID]; ok && t.After(best) {
-			continue
-		}
-
-		if nodeID == toID {
-			break
-		}
-
-		for _, rel := range relsByNode[nodeID] {
-			// Relationship expired before we arrived — can't use it
-			if rel.ValidTo != nil && rel.ValidTo.Before(t) {
-				continue
-			}
-
-			// Arrival at neighbor = max(now, when the relationship became valid)
-			arrivalAtNeighbor := t
-			if rel.ValidFrom.After(t) {
-				arrivalAtNeighbor = rel.ValidFrom
-			}
-
-			neighborID := rel.ToNodeID
-
-			// Neighbor must have existed by the time we arrive
-			neighbor, ok := allNodes[neighborID]
-			if !ok || neighbor.ValidFrom.After(arrivalAtNeighbor) {
-				continue
-			}
-
-			if best, seen := dist[neighborID]; !seen || arrivalAtNeighbor.Before(best) {
-				dist[neighborID] = arrivalAtNeighbor
-				parent[neighborID] = &earliestParent{rel: rel, previousID: nodeID}
-				heap.Push(h, earliestHeapItem{arrivalTime: arrivalAtNeighbor, nodeID: neighborID})
-			}
-		}
-	}
-
-	arrivalTime, reached := dist[toID]
-	if !reached {
-		return nil, time.Time{}
-	}
-
-	// Reconstruct path back-to-front
-	path := &Path{}
-	curID := toID
-	for curID != fromID {
-		step := parent[curID]
-		if step == nil {
-			return nil, time.Time{}
-		}
-		path.Nodes = append([]*Node{allNodes[curID]}, path.Nodes...)
-		path.Relationships = append([]*Relationship{step.rel}, path.Relationships...)
-		curID = step.previousID
-	}
-	path.Nodes = append([]*Node{allNodes[fromID]}, path.Nodes...)
-	path.Length = len(path.Relationships)
-
-	return path, arrivalTime
-}
-
-// buildSnapshotFromTimeClause resolves a TimeClause and returns a temporalSnapshot.
-func (g *DiskGraph) buildSnapshotFromTimeClause(tc *TimeClause) (*temporalSnapshot, error) {
-	var queryTime time.Time
-	if tc.Mode == "EARLIEST" {
-		allNodes, _ := g.boltStore.GetAllNodes()
-		allRels, _ := g.boltStore.GetAllRelationships()
-		var earliest *time.Time
-		for _, n := range allNodes {
-			if earliest == nil || n.ValidFrom.Before(*earliest) {
-				t := n.ValidFrom
-				earliest = &t
-			}
-		}
-		for _, r := range allRels {
-			if earliest == nil || r.ValidFrom.Before(*earliest) {
-				t := r.ValidFrom
-				earliest = &t
-			}
-		}
-		if earliest == nil {
-			return nil, nil
-		}
-		queryTime = *earliest
-	} else {
-		queryTime = time.Unix(tc.Timestamp, 0)
-	}
-	allNodes, _ := g.boltStore.GetAllNodes()
-	allRels, _ := g.boltStore.GetAllRelationships()
-	return buildTemporalSnapshot(allNodes, allRels, queryTime), nil
-}
-
-// candidateNodesInSnapshot returns nodes from a snapshot matching a node pattern.
-func candidateNodesInSnapshot(snap *temporalSnapshot, pattern NodePattern) []*Node {
-	var candidates []*Node
-	if len(pattern.Labels) > 0 {
-		for _, id := range snap.nodesByLabel[pattern.Labels[0]] {
-			if n, ok := snap.nodes[id]; ok {
-				candidates = append(candidates, n)
-			}
-		}
-	} else {
-		for _, n := range snap.nodes {
-			candidates = append(candidates, n)
-		}
-	}
-	if len(pattern.Properties) > 0 {
-		var filtered []*Node
-		for _, n := range candidates {
-			if matchesProperties(n.Properties, pattern.Properties) {
-				filtered = append(filtered, n)
-			}
-		}
-		return filtered
-	}
-	return candidates
-}
-
-// shortestPathInSnapshot runs BFS against a temporal snapshot.
-func shortestPathInSnapshot(snap *temporalSnapshot, fromID, toID string) *Path {
-	if _, ok := snap.nodes[fromID]; !ok {
-		return nil
-	}
-	if _, ok := snap.nodes[toID]; !ok {
-		return nil
-	}
-
-	queue := []string{fromID}
-	visited := map[string]bool{fromID: true}
-	parent := map[string]*diskPathStep{}
-
-	for len(queue) > 0 {
-		currentID := queue[0]
-		queue = queue[1:]
-
-		if currentID == toID {
-			return reconstructPathInSnapshot(snap, fromID, toID, parent)
-		}
-
-		for _, relID := range snap.nodeRelIndex[currentID] {
-			rel, ok := snap.rels[relID]
-			if !ok {
-				continue
-			}
-			var neighborID string
-			if rel.FromNodeID == currentID {
-				neighborID = rel.ToNodeID
-			} else {
-				neighborID = rel.FromNodeID
-			}
-			if !visited[neighborID] {
-				if _, ok := snap.nodes[neighborID]; !ok {
-					continue
-				}
-				visited[neighborID] = true
-				parent[neighborID] = &diskPathStep{rel: rel, previousID: currentID}
-				queue = append(queue, neighborID)
-			}
-		}
-	}
-	return nil
-}
-
-func reconstructPathInSnapshot(snap *temporalSnapshot, fromID, toID string, parent map[string]*diskPathStep) *Path {
-	path := &Path{Nodes: []*Node{}, Relationships: []*Relationship{}}
-	current := toID
-	var steps []string
-	var rels []*Relationship
-	for current != fromID {
-		steps = append(steps, current)
-		step := parent[current]
-		if step == nil {
-			return nil
-		}
-		rels = append(rels, step.rel)
-		current = step.previousID
-	}
-	steps = append(steps, fromID)
-	for i := len(steps) - 1; i >= 0; i-- {
-		if node, ok := snap.nodes[steps[i]]; ok {
-			path.Nodes = append(path.Nodes, node)
-		}
-	}
-	for i := len(rels) - 1; i >= 0; i-- {
-		path.Relationships = append(path.Relationships, rels[i])
-	}
-	path.Length = len(path.Relationships)
-	return path
-}
-
-// allPathsInSnapshot runs DFS against a temporal snapshot.
-func allPathsInSnapshot(snap *temporalSnapshot, fromID, toID string, maxDepth int) []*Path {
-	if _, ok := snap.nodes[fromID]; !ok {
-		return nil
-	}
-	if _, ok := snap.nodes[toID]; !ok {
-		return nil
-	}
-	var paths []*Path
-	visited := make(map[string]bool)
-	currentPath := &Path{Nodes: []*Node{}, Relationships: []*Relationship{}}
-	dfsAllPathsInSnapshot(snap, fromID, toID, visited, currentPath, &paths, maxDepth, 0)
-	return paths
-}
-
-func dfsAllPathsInSnapshot(snap *temporalSnapshot, currentID, targetID string, visited map[string]bool, currentPath *Path, allPaths *[]*Path, maxDepth, depth int) {
-	if maxDepth > 0 && depth >= maxDepth {
-		return
-	}
-	visited[currentID] = true
-	currentNode, ok := snap.nodes[currentID]
-	if !ok {
-		visited[currentID] = false
-		return
-	}
-	currentPath.Nodes = append(currentPath.Nodes, currentNode)
-
-	if currentID == targetID {
-		pathCopy := &Path{
-			Nodes:         make([]*Node, len(currentPath.Nodes)),
-			Relationships: make([]*Relationship, len(currentPath.Relationships)),
-			Length:        len(currentPath.Relationships),
-		}
-		copy(pathCopy.Nodes, currentPath.Nodes)
-		copy(pathCopy.Relationships, currentPath.Relationships)
-		*allPaths = append(*allPaths, pathCopy)
-	} else {
-		for _, relID := range snap.nodeRelIndex[currentID] {
-			rel, ok := snap.rels[relID]
-			if !ok {
-				continue
-			}
-			var neighborID string
-			if rel.FromNodeID == currentID {
-				neighborID = rel.ToNodeID
-			} else {
-				neighborID = rel.FromNodeID
-			}
-			if !visited[neighborID] {
-				if _, ok := snap.nodes[neighborID]; !ok {
-					continue
-				}
-				currentPath.Relationships = append(currentPath.Relationships, rel)
-				dfsAllPathsInSnapshot(snap, neighborID, targetID, visited, currentPath, allPaths, maxDepth, depth+1)
-				currentPath.Relationships = currentPath.Relationships[:len(currentPath.Relationships)-1]
-			}
-		}
-	}
-	currentPath.Nodes = currentPath.Nodes[:len(currentPath.Nodes)-1]
-	visited[currentID] = false
-}
 
 // candidateNodesUnlocked returns all currently-valid nodes matching a node pattern.
 func (g *DiskGraph) candidateNodesUnlocked(pattern NodePattern) []*Node {
@@ -1302,40 +1033,6 @@ func (g *DiskGraph) executeSimilarToUnlocked(query *Query, embedder Embedder) (*
 // ============================================================================
 // Temporal MATCH queries
 // ============================================================================
-
-// temporalSnapshot is an in-memory snapshot of graph data valid at a specific time.
-type temporalSnapshot struct {
-	nodes        map[string]*Node
-	nodesByLabel map[string][]string
-	nodeRelIndex map[string][]string
-	rels         map[string]*Relationship
-}
-
-// buildTemporalSnapshot filters nodes/rels to those valid at time t.
-func buildTemporalSnapshot(allNodes []*Node, allRels []*Relationship, t time.Time) *temporalSnapshot {
-	snap := &temporalSnapshot{
-		nodes:        make(map[string]*Node),
-		nodesByLabel: make(map[string][]string),
-		nodeRelIndex: make(map[string][]string),
-		rels:         make(map[string]*Relationship),
-	}
-	for _, n := range allNodes {
-		if n.IsValidAt(t) {
-			snap.nodes[n.ID] = n
-			for _, label := range n.Labels {
-				snap.nodesByLabel[label] = append(snap.nodesByLabel[label], n.ID)
-			}
-		}
-	}
-	for _, r := range allRels {
-		if r.IsValidAt(t) {
-			snap.rels[r.ID] = r
-			snap.nodeRelIndex[r.FromNodeID] = append(snap.nodeRelIndex[r.FromNodeID], r.ID)
-			snap.nodeRelIndex[r.ToNodeID] = append(snap.nodeRelIndex[r.ToNodeID], r.ID)
-		}
-	}
-	return snap
-}
 
 // executeTemporalMatchUnlocked handles MATCH ... AT TIME queries (caller holds read lock).
 func (g *DiskGraph) executeTemporalMatchUnlocked(query *Query) (*QueryResult, error) {
