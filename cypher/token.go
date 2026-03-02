@@ -38,6 +38,7 @@ const (
 	TOKEN_COLON       // :
 	TOKEN_SEMICOLON   // ;
 	TOKEN_PIPE        // |
+	TOKEN_PARAM       // $name
 
 	// Delimiters
 	TOKEN_LPAREN   // (

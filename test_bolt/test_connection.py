@@ -992,6 +992,87 @@ def main():
         print(f"  CONTAINS 'DB': {['MongoDB']}")
         print("  PASS")
 
+        # Test 65: Query parameters ($param) in WHERE
+        print("\n[Test 65] Query parameters ($param) in WHERE")
+        print("-" * 40)
+        session.run("MATCH (pt:ParamTest) DETACH DELETE pt").consume()
+        session.run("CREATE (pt:ParamTest {name: 'Alice', age: 30})").consume()
+        session.run("CREATE (pt:ParamTest {name: 'Bob', age: 25})").consume()
+        result = session.run(
+            "MATCH (pt:ParamTest) WHERE pt.name = $name RETURN pt.age AS age",
+            name="Alice"
+        )
+        rows = list(result)
+        assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+        assert rows[0]["age"] == 30, f"Expected age=30, got {rows[0]['age']}"
+        print(f"  WHERE pt.name = $name ('Alice') -> age={rows[0]['age']}")
+        print("  PASS")
+
+        # Test 66: Query parameters ($param) in MATCH properties
+        print("\n[Test 66] Query parameters ($param) in MATCH properties")
+        print("-" * 40)
+        result = session.run(
+            "MATCH (pt:ParamTest {name: $name}) RETURN pt.age AS age",
+            name="Bob"
+        )
+        rows = list(result)
+        assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+        assert rows[0]["age"] == 25, f"Expected age=25, got {rows[0]['age']}"
+        print(f"  MATCH (pt {{name: $name}}) ('Bob') -> age={rows[0]['age']}")
+        print("  PASS")
+
+        # Test 67: Query parameters ($param) in RETURN expression
+        print("\n[Test 67] Query parameters ($param) in RETURN expression")
+        print("-" * 40)
+        result = session.run(
+            "UNWIND [1] AS dummy RETURN $greeting AS msg",
+            greeting="Hello, World!"
+        )
+        rows = list(result)
+        assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+        assert rows[0]["msg"] == "Hello, World!", f"Expected 'Hello, World!', got {rows[0]['msg']}"
+        print(f"  RETURN $greeting -> '{rows[0]['msg']}'")
+        print("  PASS")
+
+        # Test 68: MERGE ON CREATE SET
+        print("\n[Test 68] MERGE ON CREATE SET")
+        print("-" * 40)
+        session.run("MATCH (mt:MergeOnTest) DETACH DELETE mt").consume()
+        # First MERGE — node doesn't exist, should CREATE and apply ON CREATE SET
+        session.run(
+            "MERGE (mt:MergeOnTest {name: 'unique1'}) "
+            "ON CREATE SET mt.created = true, mt.counter = 1 "
+            "ON MATCH SET mt.counter = 999"
+        ).consume()
+        result = session.run(
+            "MATCH (mt:MergeOnTest {name: 'unique1'}) RETURN mt.created AS created, mt.counter AS counter"
+        )
+        rows = list(result)
+        assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+        assert rows[0]["created"] == True, f"Expected created=true, got {rows[0]['created']}"
+        assert rows[0]["counter"] == 1, f"Expected counter=1, got {rows[0]['counter']}"
+        print(f"  After first MERGE: created={rows[0]['created']}, counter={rows[0]['counter']}")
+        print("  PASS")
+
+        # Test 69: MERGE ON MATCH SET
+        print("\n[Test 69] MERGE ON MATCH SET")
+        print("-" * 40)
+        # Second MERGE — node exists, should apply ON MATCH SET
+        session.run(
+            "MERGE (mt:MergeOnTest {name: 'unique1'}) "
+            "ON CREATE SET mt.created = true, mt.counter = 1 "
+            "ON MATCH SET mt.counter = 999"
+        ).consume()
+        result = session.run(
+            "MATCH (mt:MergeOnTest {name: 'unique1'}) RETURN mt.created AS created, mt.counter AS counter"
+        )
+        rows = list(result)
+        assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+        assert rows[0]["created"] == True, f"Expected created=true (unchanged), got {rows[0]['created']}"
+        assert rows[0]["counter"] == 999, f"Expected counter=999, got {rows[0]['counter']}"
+        print(f"  After second MERGE: created={rows[0]['created']}, counter={rows[0]['counter']}")
+        print("  PASS")
+
     driver.close()
     print("\n" + "=" * 50)
     print("All tests completed!")

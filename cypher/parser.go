@@ -231,8 +231,11 @@ func (p *Parser) parseMergeClause() *MergeClause {
 			p.nextToken()
 			// Parse SET items
 			for {
-				expr := p.parseExpression(LOWEST)
-				clause.OnCreate = append(clause.OnCreate, expr)
+				item := p.parseSetItem()
+				if item == nil {
+					break
+				}
+				clause.OnCreate = append(clause.OnCreate, item)
 				if !p.curTokenIs(TOKEN_COMMA) {
 					break
 				}
@@ -247,8 +250,11 @@ func (p *Parser) parseMergeClause() *MergeClause {
 			p.nextToken()
 			// Parse SET items
 			for {
-				expr := p.parseExpression(LOWEST)
-				clause.OnMatch = append(clause.OnMatch, expr)
+				item := p.parseSetItem()
+				if item == nil {
+					break
+				}
+				clause.OnMatch = append(clause.OnMatch, item)
 				if !p.curTokenIs(TOKEN_COMMA) {
 					break
 				}
@@ -865,6 +871,9 @@ func (p *Parser) parseExpression(precedence int) Expression {
 		left = p.parseBooleanLiteral()
 	case TOKEN_NULL:
 		left = p.parseNullLiteral()
+	case TOKEN_PARAM:
+		left = &Parameter{Name: p.curToken.Literal}
+		p.nextToken()
 	case TOKEN_LBRACKET:
 		left = p.parseListLiteral()
 	case TOKEN_LBRACE:

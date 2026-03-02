@@ -10,6 +10,17 @@ import (
 	"github.com/MironCo/gravecdb/embedding"
 )
 
+// injectParams adds __params__ to each match so evalExpr can resolve $param references.
+func injectParams(matches []Match, params map[string]interface{}) []Match {
+	if len(params) == 0 {
+		return matches
+	}
+	for i := range matches {
+		matches[i]["__params__"] = params
+	}
+	return matches
+}
+
 // ExecuteQueryWithEmbedder executes a Cypher-like query
 func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*QueryResult, error) {
 	// For mutating queries (CREATE, SET, DELETE), use DiskGraph's own methods
@@ -59,10 +70,16 @@ func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*
 func (g *DiskGraph) executeUnwindQuery(query *Query) (*QueryResult, error) {
 	uc := query.UnwindClause
 
+	// Build a base match with params so evalExpr can resolve $param references
+	baseMatch := Match{}
+	if len(query.Parameters) > 0 {
+		baseMatch["__params__"] = query.Parameters
+	}
+
 	// Resolve the list: either a pre-evaluated literal or a dynamic expression (e.g. range())
 	list := uc.List
 	if len(list) == 0 && uc.ListExpr != nil {
-		val := evalExpr(uc.ListExpr, Match{})
+		val := evalExpr(uc.ListExpr, baseMatch)
 		if l, ok := val.([]interface{}); ok {
 			list = l
 		}
@@ -70,7 +87,11 @@ func (g *DiskGraph) executeUnwindQuery(query *Query) (*QueryResult, error) {
 
 	var matches []Match
 	for _, item := range list {
-		matches = append(matches, Match{uc.Variable: item})
+		m := Match{uc.Variable: item}
+		if len(query.Parameters) > 0 {
+			m["__params__"] = query.Parameters
+		}
+		matches = append(matches, m)
 	}
 	if query.WhereClause != nil {
 		matches = g.filterMatchesUnlocked(matches, query.WhereClause)
@@ -185,9 +206,10 @@ func (g *DiskGraph) executeMergeQuery(query *Query) (*QueryResult, error) {
 	mc := query.MergeClause
 	result := &QueryResult{Columns: []string{}, Rows: []map[string]interface{}{}}
 
-	for _, mn := range mc.Nodes {
+	for _, mn := range mc.Create.Nodes {
 		// Try to find an existing node with matching labels + properties
 		var found *Node
+		created := false
 		if len(mn.Labels) > 0 {
 			for _, id := range g.labelIndex[mn.Labels[0]] {
 				n := g.getNodeUnlocked(id)
@@ -209,6 +231,7 @@ func (g *DiskGraph) executeMergeQuery(query *Query) (*QueryResult, error) {
 		}
 
 		if found == nil {
+			created = true
 			found = g.createNodeUnlocked(mn.Labels...)
 			for k, v := range mn.Properties {
 				if err := g.setNodePropertyUnlocked(found.ID, k, v); err != nil {
@@ -216,6 +239,25 @@ func (g *DiskGraph) executeMergeQuery(query *Query) (*QueryResult, error) {
 				}
 			}
 			// Re-fetch: setNodePropertyUnlocked creates a new version, so found is now stale
+			if refreshed := g.getNodeUnlocked(found.ID); refreshed != nil {
+				found = refreshed
+			}
+		}
+
+		// Apply ON CREATE SET or ON MATCH SET
+		setItems := mc.OnMatch
+		if created {
+			setItems = mc.OnCreate
+		}
+		if len(setItems) > 0 {
+			localMatch := Match{}
+			if mn.Variable != "" {
+				localMatch[mn.Variable] = found
+			}
+			for _, si := range setItems {
+				g.applySetItemUnlocked(si, localMatch)
+			}
+			// Re-fetch after SET
 			if refreshed := g.getNodeUnlocked(found.ID); refreshed != nil {
 				found = refreshed
 			}
@@ -370,6 +412,30 @@ func (g *DiskGraph) executeMatchCreateQuery(query *Query) (*QueryResult, error) 
 	}, nil
 }
 
+// applySetItemUnlocked applies a single SET item (from AST) against matched entities.
+// Caller must hold g.mu.
+func (g *DiskGraph) applySetItemUnlocked(si *cypher.SetItem, match Match) {
+	if si.Property == nil {
+		return
+	}
+	varName := ""
+	if ident, ok := si.Property.Object.(*cypher.Identifier); ok {
+		varName = ident.Name
+	}
+	prop := si.Property.Property
+	val := evalExpr(si.Expression, match)
+
+	entity, ok := match[varName]
+	if !ok {
+		return
+	}
+	if node, ok := entity.(*Node); ok {
+		g.setNodePropertyUnlocked(node.ID, prop, val)
+	} else if rel, ok := entity.(*Relationship); ok {
+		g.setRelPropertyUnlocked(rel.ID, prop, val)
+	}
+}
+
 // executeSetQuery handles MATCH...SET queries
 func (g *DiskGraph) executeSetQuery(query *Query) (*QueryResult, error) {
 	g.mu.Lock()
@@ -492,7 +558,8 @@ func (g *DiskGraph) executeReadQuery(query *Query, embedder Embedder) (*QueryRes
 	}
 
 	// Regular MATCH
-	matches := g.findMatchesUnlocked(query.MatchPattern, query.WhereClause)
+	matches := g.findMatchesUnlocked(query.MatchPattern, query.WhereClause, query.Parameters)
+	matches = injectParams(matches, query.Parameters)
 
 	// Apply semantic WHERE conditions: WHERE p SIMILAR TO "..."
 	if query.WhereClause != nil && len(query.WhereClause.SemanticConditions) > 0 {
@@ -1732,10 +1799,17 @@ func (g *DiskGraph) findMatchesWithExisting(pattern *MatchPattern, where *WhereC
 	return matches
 }
 
-// findMatchesUnlocked finds pattern matches using indexes (caller must hold lock)
-func (g *DiskGraph) findMatchesUnlocked(pattern *MatchPattern, where *WhereClause) []map[string]interface{} {
+// findMatchesUnlocked finds pattern matches using indexes (caller must hold lock).
+// Optional params are injected into each match for $param resolution in WHERE.
+func (g *DiskGraph) findMatchesUnlocked(pattern *MatchPattern, where *WhereClause, params ...map[string]interface{}) []map[string]interface{} {
 	if pattern == nil || len(pattern.Nodes) == 0 {
 		return nil
+	}
+
+	// Extract optional params
+	var queryParams map[string]interface{}
+	if len(params) > 0 {
+		queryParams = params[0]
 	}
 
 	// Start with the first node pattern - use label index
@@ -1779,6 +1853,9 @@ func (g *DiskGraph) findMatchesUnlocked(pattern *MatchPattern, where *WhereClaus
 		match := map[string]interface{}{}
 		if firstPattern.Variable != "" {
 			match[firstPattern.Variable] = node
+		}
+		if len(queryParams) > 0 {
+			match["__params__"] = queryParams
 		}
 		matches = append(matches, match)
 	}

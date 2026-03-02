@@ -1194,6 +1194,11 @@ func evalExpr(expr cypher.Expression, match Match) interface{} {
 		return found
 	case *cypher.ListComprehension:
 		return evalListComprehension(e, match)
+	case *cypher.Parameter:
+		if params, ok := match["__params__"].(map[string]interface{}); ok {
+			return params[e.Name]
+		}
+		return nil
 	}
 	return nil
 }

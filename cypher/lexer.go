@@ -81,6 +81,12 @@ func (l *Lexer) NextToken() Token {
 		tok = l.newToken(TOKEN_SEMICOLON, l.ch)
 	case '|':
 		tok = l.newToken(TOKEN_PIPE, l.ch)
+	case '$':
+		l.readChar() // consume $
+		name := l.readIdentifier()
+		tok.Type = TOKEN_PARAM
+		tok.Literal = name
+		return tok
 	case '(':
 		tok = l.newToken(TOKEN_LPAREN, l.ch)
 	case ')':

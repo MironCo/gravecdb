@@ -277,6 +277,12 @@ func (c *Connection) handleRun(raw *packstream.RawStruct) error {
 		return c.sendFailure("Neo.ClientError.Statement.SyntaxError", err.Error())
 	}
 
+	// Attach parameters from the Bolt protocol to the query
+	if len(run.Parameters) > 0 {
+		query.Parameters = run.Parameters
+		query.ResolveParams() // substitute $param refs in property maps
+	}
+
 	var result *graph.QueryResult
 
 	// If we're in a transaction, execute within it

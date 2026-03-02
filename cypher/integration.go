@@ -5,6 +5,45 @@ import (
 	"strings"
 )
 
+// paramRef is a sentinel stored in property maps for unresolved $param references.
+// ResolveParams replaces these with actual values before execution.
+type paramRef struct {
+	Name string
+}
+
+// ResolveParams substitutes paramRef sentinels in MATCH property maps and
+// CREATE/MERGE property maps with actual parameter values.
+func (gq *GraphQuery) ResolveParams() {
+	if len(gq.Parameters) == 0 {
+		return
+	}
+	if gq.MatchPattern != nil {
+		for i := range gq.MatchPattern.Nodes {
+			resolvePropsMap(gq.MatchPattern.Nodes[i].Properties, gq.Parameters)
+		}
+	}
+	if gq.CreateClause != nil {
+		for i := range gq.CreateClause.Nodes {
+			resolvePropsMap(gq.CreateClause.Nodes[i].Properties, gq.Parameters)
+		}
+	}
+	if gq.MergeClause != nil && gq.MergeClause.Create != nil {
+		for i := range gq.MergeClause.Create.Nodes {
+			resolvePropsMap(gq.MergeClause.Create.Nodes[i].Properties, gq.Parameters)
+		}
+	}
+}
+
+func resolvePropsMap(props map[string]interface{}, params map[string]interface{}) {
+	for k, v := range props {
+		if ref, ok := v.(*paramRef); ok {
+			if val, found := params[ref.Name]; found {
+				props[k] = val
+			}
+		}
+	}
+}
+
 // ParseToGraph converts the new parser output to graph.Query compatible structures
 // This is the main entry point for integrating with the existing query executor
 func ParseToGraph(input string) (*GraphQuery, error) {
@@ -30,7 +69,7 @@ type GraphQuery struct {
 	EmbedClause     *GraphEmbedClause
 	SimilarToClause *GraphSimilarToClause
 	UnwindClause    *GraphUnwindClause
-	MergeClause     *GraphCreateClause // reuses create structure; execution differs
+	MergeClause     *GraphMergeClause
 	RemoveClause    *GraphRemoveClause
 	Pipeline        *GraphPipeline     // set when WITH clause is present
 	IsPathQuery     bool
@@ -38,6 +77,7 @@ type GraphQuery struct {
 	ForeachClause   *GraphForeachClause
 	UnionQueries    []*GraphQuery      // sub-queries for UNION
 	UnionAll        bool               // true for UNION ALL (keep duplicates)
+	Parameters      map[string]interface{} // query parameters ($name -> value)
 }
 
 // GraphPipelineStage is one MATCH+WHERE step in a WITH-chained query.
@@ -90,6 +130,12 @@ type GraphRelPattern struct {
 type GraphCreateClause struct {
 	Nodes         []GraphCreateNode
 	Relationships []GraphCreateRelationship
+}
+
+type GraphMergeClause struct {
+	Create   *GraphCreateClause
+	OnCreate []*SetItem // SET items to apply when node is created
+	OnMatch  []*SetItem // SET items to apply when existing node is found
 }
 
 type GraphCreateNode struct {
@@ -314,11 +360,24 @@ func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
 			if gq.QueryType == "" {
 				gq.QueryType = "MERGE"
 			}
-			mc, err := convertCreateToGraph(&CreateClause{Pattern: c.Pattern})
+			cc, err := convertCreateToGraph(&CreateClause{Pattern: c.Pattern})
 			if err != nil {
 				return nil, err
 			}
-			gq.MergeClause = mc
+			gm := &GraphMergeClause{Create: cc}
+			// Convert ON CREATE SET items
+			for _, expr := range c.OnCreate {
+				if si, ok := expr.(*SetItem); ok {
+					gm.OnCreate = append(gm.OnCreate, si)
+				}
+			}
+			// Convert ON MATCH SET items
+			for _, expr := range c.OnMatch {
+				if si, ok := expr.(*SetItem); ok {
+					gm.OnMatch = append(gm.OnMatch, si)
+				}
+			}
+			gq.MergeClause = gm
 
 		case *RemoveClause:
 			rc := &GraphRemoveClause{}
@@ -685,7 +744,7 @@ func convertReturnToGraph(r *ReturnClause) *GraphReturnClause {
 			case *CaseExpression, *IsNullExpression, *InExpression,
 				*BinaryExpression, *UnaryExpression, *FunctionCall,
 				*ListComprehension, *PatternComprehension, *ListLiteral,
-				*ComparisonExpression, *MapLiteral:
+				*ComparisonExpression, *MapLiteral, *Parameter:
 				gi.Expr = e
 			}
 		}
@@ -820,6 +879,9 @@ func extractMapProps(expr Expression) (map[string]interface{}, error) {
 
 func extractExprValue(expr Expression) interface{} {
 	switch e := expr.(type) {
+	case *Parameter:
+		// Return a paramRef sentinel so ResolveParams can substitute later
+		return &paramRef{Name: e.Name}
 	case *StringLiteral:
 		return e.Value
 	case *IntegerLiteral:
