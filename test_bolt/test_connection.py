@@ -1287,6 +1287,132 @@ def main():
         print(f"  Filter correctly excludes {len(all_rows) - len(filtered_rows)} non-LVTest nodes")
         print("  PASS")
 
+        # Test 74: PageRank AT TIME EARLIEST
+        print("\n[Test 74] PageRank AT TIME EARLIEST")
+        print("-" * 40)
+        # The seed data creates nodes sequentially with 50ms sleeps.
+        # AT TIME EARLIEST should snapshot the graph at its earliest state.
+        result = session.run(
+            "CALL pageRank() YIELD node, score AT TIME EARLIEST "
+            "RETURN node.name AS name, score ORDER BY score DESC"
+        )
+        rows = list(result)
+        assert len(rows) >= 1, f"Expected at least 1 node at earliest time, got {len(rows)}"
+        # All returned nodes should have scores > 0
+        for r in rows:
+            assert r["score"] >= 0, f"Score should be >= 0, got {r['score']}"
+        print(f"  {len(rows)} nodes at earliest time")
+        print(f"  Top: {rows[0]['name']} (score={rows[0]['score']:.4f})")
+        print("  PASS")
+
+        # Test 75: Louvain AT TIME EARLIEST
+        print("\n[Test 75] Louvain AT TIME EARLIEST")
+        print("-" * 40)
+        result = session.run(
+            "CALL louvain() YIELD node, community AT TIME EARLIEST "
+            "RETURN node.name AS name, community ORDER BY community"
+        )
+        rows = list(result)
+        assert len(rows) >= 1, f"Expected at least 1 node at earliest time, got {len(rows)}"
+        communities = {r["community"] for r in rows}
+        print(f"  {len(rows)} nodes in {len(communities)} communities at earliest time")
+        # Fewer nodes at earliest time than current (seed data adds nodes over time)
+        result_now = session.run(
+            "CALL louvain() YIELD node, community "
+            "RETURN node.name AS name, community"
+        )
+        now_rows = list(result_now)
+        assert len(rows) <= len(now_rows), \
+            f"Earliest ({len(rows)}) should have <= nodes than current ({len(now_rows)})"
+        print(f"  Current: {len(now_rows)} nodes, Earliest: {len(rows)} nodes")
+        print("  PASS")
+
+        # Test 76: PageRank THROUGH TIME
+        print("\n[Test 76] PageRank THROUGH TIME")
+        print("-" * 40)
+        # Clean up any prior test data
+        session.run("MATCH (n:PRTimeTest) DETACH DELETE n").consume()
+        import time as pytime
+        # Phase 1: Create nodes (no edges yet — each node is isolated)
+        session.run("CREATE (:PRTimeTest {name: 'center'})").consume()
+        session.run("CREATE (:PRTimeTest {name: 'leaf1'})").consume()
+        session.run("CREATE (:PRTimeTest {name: 'leaf2'})").consume()
+        pytime.sleep(1.5)  # ensure distinct timestamp between phases
+        # Phase 2: Add edges — scores change because adjacency changes
+        session.run(
+            "MATCH (c:PRTimeTest {name: 'center'}), (l:PRTimeTest {name: 'leaf1'}) "
+            "CREATE (l)-[:PR_LINK]->(c)"
+        ).consume()
+        session.run(
+            "MATCH (c:PRTimeTest {name: 'center'}), (l:PRTimeTest {name: 'leaf2'}) "
+            "CREATE (l)-[:PR_LINK]->(c)"
+        ).consume()
+        pytime.sleep(1.5)  # ensure distinct timestamp
+        # Phase 3: Add a third leaf — topology changes again
+        session.run("CREATE (:PRTimeTest {name: 'leaf3'})").consume()
+        session.run(
+            "MATCH (c:PRTimeTest {name: 'center'}), (l:PRTimeTest {name: 'leaf3'}) "
+            "CREATE (l)-[:PR_LINK]->(c)"
+        ).consume()
+        result = session.run(
+            "CALL pageRank({label: 'PRTimeTest'}) YIELD node, score, valid_from, valid_to THROUGH TIME "
+            "RETURN node.name AS name, score, valid_from, valid_to ORDER BY valid_from"
+        )
+        rows = list(result)
+        # 3 phases with score changes → should have both closed and open intervals
+        assert len(rows) >= 4, f"Expected >= 4 temporal intervals, got {len(rows)}"
+        has_closed = any(r["valid_to"] is not None for r in rows)
+        has_open = any(r["valid_to"] is None for r in rows)
+        assert has_closed, "Expected closed intervals (scores changed between phases)"
+        assert has_open, "Expected open intervals (current state)"
+        names_seen = {r["name"] for r in rows}
+        assert "center" in names_seen, "center should appear in results"
+        print(f"  {len(rows)} temporal intervals across {len(names_seen)} nodes")
+        print(f"  Closed intervals: {sum(1 for r in rows if r['valid_to'] is not None)}")
+        print(f"  Open intervals: {sum(1 for r in rows if r['valid_to'] is None)}")
+        print("  PASS")
+
+        # Test 77: Louvain THROUGH TIME — community evolution
+        print("\n[Test 77] Louvain THROUGH TIME — community evolution")
+        print("-" * 40)
+        session.run("MATCH (n:LVTimeTest) DETACH DELETE n").consume()
+        # Phase 1: Create 3 isolated nodes (each in own community)
+        session.run("CREATE (:LVTimeTest {name: 'x1'})").consume()
+        session.run("CREATE (:LVTimeTest {name: 'x2'})").consume()
+        session.run("CREATE (:LVTimeTest {name: 'x3'})").consume()
+        pytime.sleep(1.5)  # distinct timestamp between phases
+        # Phase 2: Connect them into a clique (communities should change)
+        session.run(
+            "MATCH (a:LVTimeTest {name: 'x1'}), (b:LVTimeTest {name: 'x2'}) "
+            "CREATE (a)-[:LV_LINK]->(b)"
+        ).consume()
+        session.run(
+            "MATCH (a:LVTimeTest {name: 'x2'}), (b:LVTimeTest {name: 'x3'}) "
+            "CREATE (a)-[:LV_LINK]->(b)"
+        ).consume()
+        session.run(
+            "MATCH (a:LVTimeTest {name: 'x1'}), (b:LVTimeTest {name: 'x3'}) "
+            "CREATE (a)-[:LV_LINK]->(b)"
+        ).consume()
+        result = session.run(
+            "CALL louvain({label: 'LVTimeTest'}) YIELD node, community, valid_from, valid_to THROUGH TIME "
+            "RETURN node.name AS name, community, valid_from, valid_to ORDER BY valid_from"
+        )
+        rows = list(result)
+        assert len(rows) >= 3, f"Expected >= 3 temporal intervals, got {len(rows)}"
+        names_seen = {r["name"] for r in rows}
+        assert names_seen == {"x1", "x2", "x3"}, f"Expected x1,x2,x3, got {names_seen}"
+        # Should have temporal intervals showing evolution
+        open_rows = [r for r in rows if r["valid_to"] is None]
+        assert len(open_rows) >= 1, f"Expected open intervals for current state, got {len(open_rows)}"
+        # Verify valid_from/valid_to are present and valid
+        for r in rows:
+            assert r["valid_from"] is not None, "valid_from should not be None"
+            assert r["community"] is not None, "community should not be None"
+        print(f"  {len(rows)} temporal intervals across {len(names_seen)} nodes")
+        print(f"  Open (current): {len(open_rows)}, Closed (historical): {len(rows) - len(open_rows)}")
+        print("  PASS")
+
     driver.close()
     print("\n" + "=" * 50)
     print("All tests completed!")

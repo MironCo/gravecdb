@@ -541,9 +541,10 @@ func (s *Star) expression() {}
 
 // CallClause represents CALL procedure() YIELD ...
 type CallClause struct {
-	Procedure  string
-	Config     Expression // optional map literal config
-	YieldItems []string   // variable names to yield
+	Procedure   string
+	Config      Expression // optional map literal config
+	YieldItems  []string   // variable names to yield
+	ThroughTime bool       // true for CALL ... THROUGH TIME
 }
 
 func (c *CallClause) node()   {}

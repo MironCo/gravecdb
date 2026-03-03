@@ -1549,6 +1549,17 @@ func (p *Parser) parseCallClause() *CallClause {
 		p.nextToken() // consume comma
 	}
 
+	// Check for THROUGH TIME modifier
+	if p.curTokenIs(TOKEN_THROUGH) {
+		p.nextToken() // consume THROUGH
+		if !p.curTokenIs(TOKEN_TIME) {
+			p.addError("expected TIME after THROUGH")
+			return nil
+		}
+		p.nextToken() // consume TIME
+		clause.ThroughTime = true
+	}
+
 	return clause
 }
 

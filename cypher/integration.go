@@ -246,9 +246,10 @@ type GraphForeachClause struct {
 }
 
 type GraphCallClause struct {
-	Procedure  string
-	Config     map[string]interface{}
-	YieldItems []string
+	Procedure   string
+	Config      map[string]interface{}
+	YieldItems  []string
+	ThroughTime bool
 }
 
 type GraphRemoveItem struct {
@@ -418,6 +419,7 @@ func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
 					}
 				}
 			}
+			gc.ThroughTime = c.ThroughTime
 			gq.CallClause = gc
 		}
 	}

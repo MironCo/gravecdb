@@ -405,6 +405,238 @@ func buildTemporalSnapshot(allNodes []*Node, allRels []*Relationship, t time.Tim
 	return snap
 }
 
+// ── Snapshot-aware algorithm methods ─────────────────────────────────────────
+
+// gatherNodes returns nodes from the snapshot, optionally filtered by label.
+func (snap *temporalSnapshot) gatherNodes(config map[string]interface{}) []*Node {
+	label, _ := config["label"].(string)
+	if label != "" {
+		nodeIDs := snap.nodesByLabel[label]
+		nodes := make([]*Node, 0, len(nodeIDs))
+		for _, id := range nodeIDs {
+			if nd, ok := snap.nodes[id]; ok {
+				nodes = append(nodes, nd)
+			}
+		}
+		return nodes
+	}
+	nodes := make([]*Node, 0, len(snap.nodes))
+	for _, nd := range snap.nodes {
+		nodes = append(nodes, nd)
+	}
+	return nodes
+}
+
+// computePageRank runs PageRank on a temporal snapshot.
+func (snap *temporalSnapshot) computePageRank(config map[string]interface{}) ([]Match, error) {
+	const (
+		damping    = 0.85
+		maxIter    = 20
+		convergeTh = 1e-6
+	)
+
+	nodes := snap.gatherNodes(config)
+	if len(nodes) == 0 {
+		return nil, nil
+	}
+
+	n := len(nodes)
+	nodeSet := make(map[string]bool, n)
+	for _, nd := range nodes {
+		nodeSet[nd.ID] = true
+	}
+
+	outLinks := make(map[string][]string, n)
+	for _, nd := range nodes {
+		for _, relID := range snap.nodeRelIndex[nd.ID] {
+			rel := snap.rels[relID]
+			if rel == nil {
+				continue
+			}
+			if rel.FromNodeID == nd.ID && nodeSet[rel.ToNodeID] {
+				outLinks[nd.ID] = append(outLinks[nd.ID], rel.ToNodeID)
+			}
+		}
+	}
+
+	score := make(map[string]float64, n)
+	initVal := 1.0 / float64(n)
+	for _, nd := range nodes {
+		score[nd.ID] = initVal
+	}
+
+	base := (1.0 - damping) / float64(n)
+	for iter := 0; iter < maxIter; iter++ {
+		newScore := make(map[string]float64, n)
+		for _, nd := range nodes {
+			newScore[nd.ID] = base
+		}
+
+		for _, nd := range nodes {
+			out := outLinks[nd.ID]
+			if len(out) == 0 {
+				share := damping * score[nd.ID] / float64(n)
+				for _, nd2 := range nodes {
+					newScore[nd2.ID] += share
+				}
+			} else {
+				share := damping * score[nd.ID] / float64(len(out))
+				for _, target := range out {
+					newScore[target] += share
+				}
+			}
+		}
+
+		diff := 0.0
+		for _, nd := range nodes {
+			diff += math.Abs(newScore[nd.ID] - score[nd.ID])
+		}
+		score = newScore
+		if diff < convergeTh {
+			break
+		}
+	}
+
+	matches := make([]Match, 0, n)
+	for _, nd := range nodes {
+		matches = append(matches, Match{
+			"node":  nd,
+			"score": math.Round(score[nd.ID]*1e6) / 1e6,
+		})
+	}
+	return matches, nil
+}
+
+// computeLouvain runs Louvain community detection on a temporal snapshot.
+func (snap *temporalSnapshot) computeLouvain(config map[string]interface{}) ([]Match, error) {
+	const maxPasses = 10
+
+	nodes := snap.gatherNodes(config)
+	if len(nodes) == 0 {
+		return nil, nil
+	}
+
+	n := len(nodes)
+	nodeSet := make(map[string]bool, n)
+	idToIdx := make(map[string]int, n)
+	for i, nd := range nodes {
+		nodeSet[nd.ID] = true
+		idToIdx[nd.ID] = i
+	}
+
+	adj := make([]map[int]float64, n)
+	for i := range adj {
+		adj[i] = make(map[int]float64)
+	}
+
+	totalWeight := 0.0
+	for _, nd := range nodes {
+		for _, relID := range snap.nodeRelIndex[nd.ID] {
+			rel := snap.rels[relID]
+			if rel == nil {
+				continue
+			}
+			var neighborID string
+			if rel.FromNodeID == nd.ID {
+				neighborID = rel.ToNodeID
+			} else {
+				neighborID = rel.FromNodeID
+			}
+			if !nodeSet[neighborID] {
+				continue
+			}
+			i := idToIdx[nd.ID]
+			j := idToIdx[neighborID]
+			if i < j {
+				totalWeight += 1.0
+			}
+			adj[i][j] += 1.0
+		}
+	}
+
+	if totalWeight == 0 {
+		matches := make([]Match, 0, n)
+		for i, nd := range nodes {
+			matches = append(matches, Match{"node": nd, "community": i})
+		}
+		return matches, nil
+	}
+
+	m2 := 2.0 * totalWeight
+	community := make([]int, n)
+	for i := range community {
+		community[i] = i
+	}
+
+	degree := make([]float64, n)
+	for i := range nodes {
+		for _, w := range adj[i] {
+			degree[i] += w
+		}
+	}
+
+	for pass := 0; pass < maxPasses; pass++ {
+		moved := false
+		for i := 0; i < n; i++ {
+			bestComm := community[i]
+			bestGain := 0.0
+
+			commWeights := make(map[int]float64)
+			for j, w := range adj[i] {
+				commWeights[community[j]] += w
+			}
+
+			commDegree := make(map[int]float64)
+			for k := 0; k < n; k++ {
+				commDegree[community[k]] += degree[k]
+			}
+
+			curComm := community[i]
+			ki := degree[i]
+
+			for c, wic := range commWeights {
+				if c == curComm {
+					continue
+				}
+				gain := (wic-commWeights[curComm])/totalWeight +
+					ki*(commDegree[curComm]-ki-commDegree[c])/(m2*totalWeight)
+
+				if gain > bestGain {
+					bestGain = gain
+					bestComm = c
+				}
+			}
+
+			if bestComm != curComm {
+				community[i] = bestComm
+				moved = true
+			}
+		}
+
+		if !moved {
+			break
+		}
+	}
+
+	commMap := make(map[int]int)
+	nextID := 0
+	for i := range nodes {
+		if _, ok := commMap[community[i]]; !ok {
+			commMap[community[i]] = nextID
+			nextID++
+		}
+	}
+
+	matches := make([]Match, 0, n)
+	for i, nd := range nodes {
+		matches = append(matches, Match{
+			"node":      nd,
+			"community": commMap[community[i]],
+		})
+	}
+	return matches, nil
+}
+
 // buildSnapshotFromTimeClause resolves a TimeClause and returns a temporalSnapshot.
 func (g *DiskGraph) buildSnapshotFromTimeClause(tc *TimeClause) (*temporalSnapshot, error) {
 	var queryTime time.Time

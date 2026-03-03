@@ -2,6 +2,8 @@ package graph
 
 import (
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -80,19 +82,199 @@ func (g *DiskGraph) executeCallQuery(query *Query) (*QueryResult, error) {
 	var matches []Match
 	var err error
 
-	switch cc.Procedure {
-	case "pagerank":
-		matches, err = g.computePageRank(cc.Config)
-	case "louvain":
-		matches, err = g.computeLouvain(cc.Config)
-	default:
-		return nil, fmt.Errorf("unknown procedure: %s", cc.Procedure)
+	if query.TimeClause != nil {
+		// AT TIME: build temporal snapshot, run algorithm on it
+		snap, snapErr := g.buildSnapshotFromTimeClause(query.TimeClause)
+		if snapErr != nil {
+			return nil, snapErr
+		}
+		if snap == nil {
+			return buildResult(nil, query.ReturnClause), nil
+		}
+		switch cc.Procedure {
+		case "pagerank":
+			matches, err = snap.computePageRank(cc.Config)
+		case "louvain":
+			matches, err = snap.computeLouvain(cc.Config)
+		default:
+			return nil, fmt.Errorf("unknown procedure: %s", cc.Procedure)
+		}
+	} else if cc.ThroughTime {
+		// THROUGH TIME: run algorithm at each topology-change event
+		matches, err = g.executeCallThroughTime(cc)
+	} else {
+		// Current graph state
+		switch cc.Procedure {
+		case "pagerank":
+			matches, err = g.computePageRank(cc.Config)
+		case "louvain":
+			matches, err = g.computeLouvain(cc.Config)
+		default:
+			return nil, fmt.Errorf("unknown procedure: %s", cc.Procedure)
+		}
 	}
 	if err != nil {
 		return nil, err
 	}
 
 	return buildResult(matches, query.ReturnClause), nil
+}
+
+// executeCallThroughTime runs an algorithm at every topology-change event
+// and returns temporal intervals showing how each node's value evolves.
+// Caller must hold g.mu (at least RLock).
+func (g *DiskGraph) executeCallThroughTime(cc *CallClause) ([]Match, error) {
+	allNodes, _ := g.boltStore.GetAllNodes()
+	allRels, _ := g.boltStore.GetAllRelationships()
+
+	// 1. Collect all distinct timestamps where the graph topology changes.
+	timeSet := make(map[int64]bool)
+	for _, n := range allNodes {
+		timeSet[n.ValidFrom.Unix()] = true
+		if n.ValidTo != nil {
+			timeSet[n.ValidTo.Unix()] = true
+		}
+	}
+	for _, r := range allRels {
+		timeSet[r.ValidFrom.Unix()] = true
+		if r.ValidTo != nil {
+			timeSet[r.ValidTo.Unix()] = true
+		}
+	}
+	if len(timeSet) == 0 {
+		return nil, nil
+	}
+
+	times := make([]int64, 0, len(timeSet))
+	for t := range timeSet {
+		times = append(times, t)
+	}
+	sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
+
+	// 2. Determine value key and comparison mode.
+	isLouvain := cc.Procedure == "louvain"
+	valueKey := "score"
+	if isLouvain {
+		valueKey = "community"
+	}
+
+	// 3. Track per-node intervals.
+	type nodeInterval struct {
+		node      *Node
+		value     interface{}
+		validFrom time.Time
+		// For Louvain: canonical community key (sorted member IDs hash)
+		commKey string
+	}
+	current := make(map[string]*nodeInterval) // nodeID -> open interval
+	var results []Match
+
+	// closeInterval emits a completed interval as a Match row.
+	closeInterval := func(ni *nodeInterval, validTo time.Time) {
+		results = append(results, Match{
+			"node":       ni.node,
+			valueKey:     ni.value,
+			"valid_from": ni.validFrom.Format(time.RFC3339),
+			"valid_to":   validTo.Format(time.RFC3339),
+		})
+	}
+
+	for _, ts := range times {
+		t := time.Unix(ts, 0)
+		snap := buildTemporalSnapshot(allNodes, allRels, t)
+
+		var matches []Match
+		var err error
+		switch cc.Procedure {
+		case "pagerank":
+			matches, err = snap.computePageRank(cc.Config)
+		case "louvain":
+			matches, err = snap.computeLouvain(cc.Config)
+		default:
+			return nil, fmt.Errorf("unknown procedure: %s", cc.Procedure)
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		// Build current node->value map and community membership for Louvain.
+		currentValues := make(map[string]interface{})
+		currentNodes := make(map[string]*Node)
+		// For Louvain: build community -> sorted member list -> canonical key.
+		commMembers := make(map[int][]string) // communityID -> sorted nodeIDs
+		for _, m := range matches {
+			node := m["node"].(*Node)
+			currentValues[node.ID] = m[valueKey]
+			currentNodes[node.ID] = node
+			if isLouvain {
+				cid := m["community"].(int)
+				commMembers[cid] = append(commMembers[cid], node.ID)
+			}
+		}
+
+		// Canonicalize Louvain communities by sorted member set.
+		commCanonical := make(map[int]string) // communityID -> canonical key
+		if isLouvain {
+			for cid, members := range commMembers {
+				sort.Strings(members)
+				commCanonical[cid] = strings.Join(members, ",")
+			}
+		}
+
+		// Detect changes: nodes that disappeared or changed value.
+		for nodeID, prev := range current {
+			newVal, stillExists := currentValues[nodeID]
+			if !stillExists {
+				closeInterval(prev, t)
+				delete(current, nodeID)
+				continue
+			}
+			changed := false
+			if isLouvain {
+				// Compare by canonical community membership, not raw ID.
+				newCID := newVal.(int)
+				newKey := commCanonical[newCID]
+				changed = prev.commKey != newKey
+			} else {
+				// PageRank: compare with tolerance.
+				oldScore, _ := prev.value.(float64)
+				newScore, _ := newVal.(float64)
+				changed = math.Abs(oldScore-newScore) > 1e-4
+			}
+			if changed {
+				closeInterval(prev, t)
+				delete(current, nodeID)
+			}
+		}
+
+		// Start new intervals for nodes that appeared or changed.
+		for nodeID, val := range currentValues {
+			if _, exists := current[nodeID]; !exists {
+				ni := &nodeInterval{
+					node:      currentNodes[nodeID],
+					value:     val,
+					validFrom: t,
+				}
+				if isLouvain {
+					cid := val.(int)
+					ni.commKey = commCanonical[cid]
+				}
+				current[nodeID] = ni
+			}
+		}
+	}
+
+	// 4. Close still-open intervals (valid_to = nil means "still current").
+	for _, ni := range current {
+		results = append(results, Match{
+			"node":       ni.node,
+			valueKey:     ni.value,
+			"valid_from": ni.validFrom.Format(time.RFC3339),
+			"valid_to":   nil,
+		})
+	}
+
+	return results, nil
 }
 
 // executeUnwindQuery expands a list literal into rows and applies RETURN.
