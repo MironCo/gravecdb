@@ -8,22 +8,22 @@ func TestShortestPath(t *testing.T) {
 	defer cleanup()
 
 	// Create a network of nodes
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 
-	bob := db.CreateNode("Person")
+	bob, _ := db.CreateNode("Person")
 	db.SetNodeProperty(bob.ID, "name", "Bob")
 
-	carol := db.CreateNode("Person")
+	carol, _ := db.CreateNode("Person")
 	db.SetNodeProperty(carol.ID, "name", "Carol")
 
-	david := db.CreateNode("Person")
+	david, _ := db.CreateNode("Person")
 	db.SetNodeProperty(david.ID, "name", "David")
 
-	eve := db.CreateNode("Person")
+	eve, _ := db.CreateNode("Person")
 	db.SetNodeProperty(eve.ID, "name", "Eve")
 
-	frank := db.CreateNode("Person")
+	frank, _ := db.CreateNode("Person")
 	db.SetNodeProperty(frank.ID, "name", "Frank")
 
 	// Create relationships
@@ -71,10 +71,10 @@ func TestAllPaths(t *testing.T) {
 	defer cleanup()
 
 	// Create a simple network
-	alice := db.CreateNode("Person")
-	bob := db.CreateNode("Person")
-	carol := db.CreateNode("Person")
-	david := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
+	bob, _ := db.CreateNode("Person")
+	carol, _ := db.CreateNode("Person")
+	david, _ := db.CreateNode("Person")
 
 	// Create relationships forming multiple paths
 	db.CreateRelationship("KNOWS", alice.ID, bob.ID)
@@ -106,10 +106,10 @@ func TestPathExistence(t *testing.T) {
 	db, cleanup := newTestGraph(t)
 	defer cleanup()
 
-	alice := db.CreateNode("Person")
-	bob := db.CreateNode("Person")
-	carol := db.CreateNode("Person")
-	isolated := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
+	bob, _ := db.CreateNode("Person")
+	carol, _ := db.CreateNode("Person")
+	isolated, _ := db.CreateNode("Person")
 
 	// Create a path Alice -> Bob -> Carol
 	db.CreateRelationship("KNOWS", alice.ID, bob.ID)
@@ -136,8 +136,8 @@ func TestNoPath(t *testing.T) {
 	db, cleanup := newTestGraph(t)
 	defer cleanup()
 
-	alice := db.CreateNode("Person")
-	bob := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
+	bob, _ := db.CreateNode("Person")
 
 	// No relationships, so no path
 	path := db.ShortestPath(alice.ID, bob.ID)
@@ -156,7 +156,7 @@ func TestSelfPath(t *testing.T) {
 	db, cleanup := newTestGraph(t)
 	defer cleanup()
 
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 
 	// Path from node to itself should have length 0
 	path := db.ShortestPath(alice.ID, alice.ID)

@@ -234,7 +234,9 @@ func (g *DiskGraph) setRelPropertyUnlocked(relID, key string, value interface{})
 	}
 
 	rel.Properties[key] = value
-	g.boltStore.SaveRelationship(rel)
+	if err := g.boltStore.SaveRelationship(rel); err != nil {
+		return fmt.Errorf("failed to save relationship: %w", err)
+	}
 	g.relCache.Add(relID, rel)
 
 	return nil
@@ -266,11 +268,16 @@ func (g *DiskGraph) getRelationshipsForNodeUnlocked(nodeID string) []*Relationsh
 
 // deleteRelationshipUnlocked deletes a relationship (caller must hold write lock)
 func (g *DiskGraph) deleteRelationshipUnlocked(relID string) error {
-	rel, _ := g.boltStore.GetRelationship(relID)
+	rel, err := g.boltStore.GetRelationship(relID)
+	if err != nil {
+		return fmt.Errorf("failed to get relationship: %w", err)
+	}
 	if rel != nil {
 		now := time.Now()
 		rel.ValidTo = &now
-		g.boltStore.SaveRelationship(rel)
+		if err := g.boltStore.SaveRelationship(rel); err != nil {
+			return fmt.Errorf("failed to save relationship: %w", err)
+		}
 
 		// Remove from relationship index
 		g.removeFromRelIndex(rel.FromNodeID, relID)

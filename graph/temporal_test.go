@@ -26,7 +26,7 @@ func TestTemporalNodeProperties(t *testing.T) {
 	defer cleanup()
 
 	// Create a node with initial properties
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 	db.SetNodeProperty(alice.ID, "role", "Engineer")
 
@@ -81,13 +81,13 @@ func TestTemporalRelationships(t *testing.T) {
 	defer cleanup()
 
 	// Create nodes
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 
-	techCorp := db.CreateNode("Company")
+	techCorp, _ := db.CreateNode("Company")
 	db.SetNodeProperty(techCorp.ID, "name", "TechCorp")
 
-	startup := db.CreateNode("Company")
+	startup, _ := db.CreateNode("Company")
 	db.SetNodeProperty(startup.ID, "name", "Startup")
 
 	// Alice works at TechCorp
@@ -140,7 +140,7 @@ func TestTemporalNodeDeletion(t *testing.T) {
 	defer cleanup()
 
 	// Create a node
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 
 	time1 := time.Now()
@@ -173,8 +173,8 @@ func TestTemporalRelationshipProperties(t *testing.T) {
 	defer cleanup()
 
 	// Create nodes and relationship
-	alice := db.CreateNode("Person")
-	bob := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
+	bob, _ := db.CreateNode("Person")
 	friendship, _ := db.CreateRelationship("FRIENDS_WITH", alice.ID, bob.ID)
 	db.SetRelationshipProperty(friendship.ID, "since", 2020)
 
@@ -212,13 +212,13 @@ func TestTemporalComplexScenario(t *testing.T) {
 	defer cleanup()
 
 	// Create initial state
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 
-	bob := db.CreateNode("Person")
+	bob, _ := db.CreateNode("Person")
 	db.SetNodeProperty(bob.ID, "name", "Bob")
 
-	techCorp := db.CreateNode("Company")
+	techCorp, _ := db.CreateNode("Company")
 	db.SetNodeProperty(techCorp.ID, "name", "TechCorp")
 
 	aliceJob1, _ := db.CreateRelationship("WORKS_AT", alice.ID, techCorp.ID)
@@ -242,7 +242,7 @@ func TestTemporalComplexScenario(t *testing.T) {
 
 	// Bob leaves TechCorp
 	db.DeleteRelationship(bobJob.ID)
-	startup := db.CreateNode("Company")
+	startup, _ := db.CreateNode("Company")
 	db.SetNodeProperty(startup.ID, "name", "Startup")
 	bobJob2, _ := db.CreateRelationship("WORKS_AT", bob.ID, startup.ID)
 	db.SetRelationshipProperty(bobJob2.ID, "title", "Design Lead")
@@ -351,7 +351,7 @@ func TestAsOfWithNonexistentNode(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Create node
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 
 	// Query before node existed
@@ -373,7 +373,7 @@ func TestTemporalQueryAtExactCreationTime(t *testing.T) {
 	db, cleanup := newTestGraph(t)
 	defer cleanup()
 
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 	creationTime := time.Now()
 
@@ -390,7 +390,7 @@ func TestTemporalRapidUpdates(t *testing.T) {
 	db, cleanup := newTestGraph(t)
 	defer cleanup()
 
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 
 	// Capture times and perform rapid updates
@@ -423,7 +423,7 @@ func TestTemporalPropertyRemovalAndReaddition(t *testing.T) {
 	db, cleanup := newTestGraph(t)
 	defer cleanup()
 
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 	db.SetNodeProperty(alice.ID, "email", "alice@example.com")
 
@@ -481,17 +481,17 @@ func TestTemporalMultipleNodesWithSameLabel(t *testing.T) {
 	defer cleanup()
 
 	// Create initial state with 2 people
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 
-	bob := db.CreateNode("Person")
+	bob, _ := db.CreateNode("Person")
 	db.SetNodeProperty(bob.ID, "name", "Bob")
 
 	time1 := time.Now()
 	time.Sleep(10 * time.Millisecond)
 
 	// Add a third person
-	carol := db.CreateNode("Person")
+	carol, _ := db.CreateNode("Person")
 	db.SetNodeProperty(carol.ID, "name", "Carol")
 
 	time2 := time.Now()
@@ -526,8 +526,8 @@ func TestTemporalRelationshipPropertyCascade(t *testing.T) {
 	db, cleanup := newTestGraph(t)
 	defer cleanup()
 
-	alice := db.CreateNode("Person")
-	bob := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
+	bob, _ := db.CreateNode("Person")
 	friendship, _ := db.CreateRelationship("FRIENDS_WITH", alice.ID, bob.ID)
 
 	// Track property changes
@@ -599,7 +599,7 @@ func TestTemporalFutureQuery(t *testing.T) {
 	db, cleanup := newTestGraph(t)
 	defer cleanup()
 
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 
 	// Query at a future time (should see current state)

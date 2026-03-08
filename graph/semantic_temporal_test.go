@@ -15,7 +15,7 @@ func TestSemanticSearchThroughTime(t *testing.T) {
 	embedder := embedding.NewMockEmbedder()
 
 	// Create a person whose role evolves over time
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 	db.SetNodeProperty(alice.ID, "role", "software engineer")
 
@@ -243,7 +243,7 @@ func TestSemanticSearchThroughTimeWithLimit(t *testing.T) {
 	embedder := embedding.NewMockEmbedder()
 
 	// Create a person with multiple role changes
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 	db.SetNodeProperty(alice.ID, "role", "junior engineer")
 
@@ -288,7 +288,7 @@ func TestPropertySnapshotInThroughTime(t *testing.T) {
 	embedder := embedding.NewMockEmbedder()
 
 	// Create a person with properties that change
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 	db.SetNodeProperty(alice.ID, "role", "engineer")
 	db.SetNodeProperty(alice.ID, "level", "L3")

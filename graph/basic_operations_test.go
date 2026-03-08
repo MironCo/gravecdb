@@ -8,15 +8,15 @@ func TestBasicNodeOperations(t *testing.T) {
 	defer cleanup()
 
 	// Create nodes
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 	db.SetNodeProperty(alice.ID, "age", 30)
 
-	bob := db.CreateNode("Person")
+	bob, _ := db.CreateNode("Person")
 	db.SetNodeProperty(bob.ID, "name", "Bob")
 	db.SetNodeProperty(bob.ID, "age", 25)
 
-	company := db.CreateNode("Company")
+	company, _ := db.CreateNode("Company")
 	db.SetNodeProperty(company.ID, "name", "TechCorp")
 	db.SetNodeProperty(company.ID, "founded", 2020)
 
@@ -54,13 +54,13 @@ func TestBasicRelationshipOperations(t *testing.T) {
 	defer cleanup()
 
 	// Create nodes
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 
-	bob := db.CreateNode("Person")
+	bob, _ := db.CreateNode("Person")
 	db.SetNodeProperty(bob.ID, "name", "Bob")
 
-	company := db.CreateNode("Company")
+	company, _ := db.CreateNode("Company")
 	db.SetNodeProperty(company.ID, "name", "TechCorp")
 
 	// Create relationships
@@ -113,13 +113,13 @@ func TestRelationshipQueries(t *testing.T) {
 	defer cleanup()
 
 	// Create nodes
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 
-	bob := db.CreateNode("Person")
+	bob, _ := db.CreateNode("Person")
 	db.SetNodeProperty(bob.ID, "name", "Bob")
 
-	company := db.CreateNode("Company")
+	company, _ := db.CreateNode("Company")
 	db.SetNodeProperty(company.ID, "name", "TechCorp")
 
 	// Create relationships
@@ -167,7 +167,7 @@ func TestNodeRetrieval(t *testing.T) {
 	db, cleanup := newTestGraph(t)
 	defer cleanup()
 
-	alice := db.CreateNode("Person")
+	alice, _ := db.CreateNode("Person")
 	db.SetNodeProperty(alice.ID, "name", "Alice")
 
 	// Get node by ID

@@ -443,7 +443,11 @@ func (g *DiskGraph) executeMergeQuery(query *Query) (*QueryResult, error) {
 
 		if found == nil {
 			created = true
-			found = g.createNodeUnlocked(mn.Labels...)
+			var err error
+			found, err = g.createNodeUnlocked(mn.Labels...)
+			if err != nil {
+				return nil, err
+			}
 			for k, v := range mn.Properties {
 				if err := g.setNodePropertyUnlocked(found.ID, k, v); err != nil {
 					return nil, err
@@ -504,7 +508,10 @@ func (g *DiskGraph) executeCreateQuery(query *Query) (*QueryResult, error) {
 
 	// Create nodes
 	for _, nodeSpec := range cc.Nodes {
-		node := g.createNodeUnlocked(nodeSpec.Labels...)
+		node, err := g.createNodeUnlocked(nodeSpec.Labels...)
+		if err != nil {
+			return nil, err
+		}
 
 		// Set properties
 		for key, value := range nodeSpec.Properties {
@@ -583,7 +590,10 @@ func (g *DiskGraph) executeMatchCreateQuery(query *Query) (*QueryResult, error) 
 					continue
 				}
 			}
-			node := g.createNodeUnlocked(nodeSpec.Labels...)
+			node, err := g.createNodeUnlocked(nodeSpec.Labels...)
+			if err != nil {
+				continue
+			}
 			for key, value := range nodeSpec.Properties {
 				g.setNodePropertyUnlocked(node.ID, key, value)
 			}

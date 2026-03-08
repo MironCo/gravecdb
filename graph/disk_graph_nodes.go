@@ -56,7 +56,10 @@ func (g *DiskGraph) GetNodesByLabel(label string) []*Node {
 		}
 
 		// Load from disk
-		node, _ := g.boltStore.GetNode(id)
+		node, err := g.boltStore.GetNode(id)
+		if err != nil {
+			continue
+		}
 		if node != nil {
 			g.nodeCache.Add(id, node)
 			nodes = append(nodes, node)
@@ -74,7 +77,7 @@ func (g *DiskGraph) GetAllNodes() ([]*Node, error) {
 }
 
 // CreateNode creates a new node and persists to disk
-func (g *DiskGraph) CreateNode(labels ...string) *Node {
+func (g *DiskGraph) CreateNode(labels ...string) (*Node, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -87,7 +90,7 @@ func (g *DiskGraph) CreateNode(labels ...string) *Node {
 	}
 
 	if err := g.boltStore.SaveNode(node); err != nil {
-		panic(fmt.Sprintf("failed to save node: %v", err))
+		return nil, fmt.Errorf("failed to save node: %w", err)
 	}
 
 	// Update label index
@@ -98,11 +101,11 @@ func (g *DiskGraph) CreateNode(labels ...string) *Node {
 	// Add to cache
 	g.nodeCache.Add(node.ID, node)
 
-	return node
+	return node, nil
 }
 
 // createNodeUnlocked creates a node (caller must hold write lock)
-func (g *DiskGraph) createNodeUnlocked(labels ...string) *Node {
+func (g *DiskGraph) createNodeUnlocked(labels ...string) (*Node, error) {
 	node := &Node{
 		ID:         uuid.New().String(),
 		Labels:     labels,
@@ -110,7 +113,9 @@ func (g *DiskGraph) createNodeUnlocked(labels ...string) *Node {
 		ValidFrom:  time.Now(),
 	}
 
-	g.boltStore.SaveNode(node)
+	if err := g.boltStore.SaveNode(node); err != nil {
+		return nil, fmt.Errorf("failed to save node: %w", err)
+	}
 
 	// Update in-memory label index
 	for _, label := range labels {
@@ -120,7 +125,7 @@ func (g *DiskGraph) createNodeUnlocked(labels ...string) *Node {
 	// Add to cache
 	g.nodeCache.Add(node.ID, node)
 
-	return node
+	return node, nil
 }
 
 // SetNodeProperty sets a property on a node
@@ -187,7 +192,9 @@ func (g *DiskGraph) setNodePropertyUnlocked(nodeID, key string, value interface{
 	}
 
 	node.Properties[key] = value
-	g.boltStore.SaveNode(node)
+	if err := g.boltStore.SaveNode(node); err != nil {
+		return fmt.Errorf("failed to save node: %w", err)
+	}
 	g.nodeCache.Add(nodeID, node)
 
 	return nil
@@ -225,7 +232,10 @@ func (g *DiskGraph) DeleteNode(nodeID string) error {
 	g.nodeCache.Remove(nodeID)
 
 	// Remove from label index
-	node, _ := g.boltStore.GetNode(nodeID)
+	node, err := g.boltStore.GetNode(nodeID)
+	if err != nil {
+		return fmt.Errorf("failed to get node for label cleanup: %w", err)
+	}
 	if node != nil {
 		for _, label := range node.Labels {
 			ids := g.labelIndex[label]
@@ -244,11 +254,16 @@ func (g *DiskGraph) DeleteNode(nodeID string) error {
 
 // deleteNodeUnlocked deletes a node (caller must hold write lock)
 func (g *DiskGraph) deleteNodeUnlocked(nodeID string) error {
-	node, _ := g.boltStore.GetNode(nodeID)
+	node, err := g.boltStore.GetNode(nodeID)
+	if err != nil {
+		return fmt.Errorf("failed to get node: %w", err)
+	}
 	if node != nil {
 		now := time.Now()
 		node.ValidTo = &now
-		g.boltStore.SaveNode(node)
+		if err := g.boltStore.SaveNode(node); err != nil {
+			return fmt.Errorf("failed to save node: %w", err)
+		}
 
 		// Remove from label index
 		for _, label := range node.Labels {
@@ -324,7 +339,9 @@ func (g *DiskGraph) deleteNodePropertyUnlocked(nodeID, key string) error {
 		return nil // nothing to do
 	}
 	delete(node.Properties, key)
-	g.boltStore.SaveNode(node)
+	if err := g.boltStore.SaveNode(node); err != nil {
+		return fmt.Errorf("failed to save node: %w", err)
+	}
 	g.nodeCache.Add(nodeID, node)
 	return nil
 }
@@ -348,7 +365,9 @@ func (g *DiskGraph) removeNodeLabelUnlocked(nodeID, label string) error {
 		return nil // nothing to do
 	}
 	node.Labels = newLabels
-	g.boltStore.SaveNode(node)
+	if err := g.boltStore.SaveNode(node); err != nil {
+		return fmt.Errorf("failed to save node: %w", err)
+	}
 	g.nodeCache.Add(nodeID, node)
 
 	// Update label index

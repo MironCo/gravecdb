@@ -269,7 +269,11 @@ func createNode(c *gin.Context) {
 		return
 	}
 
-	node := db.CreateNode(req.Labels...)
+	node, err := db.CreateNode(req.Labels...)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	for key, value := range req.Properties {
 		db.SetNodeProperty(node.ID, key, value)
 	}
