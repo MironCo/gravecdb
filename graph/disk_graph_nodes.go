@@ -106,11 +106,16 @@ func (g *DiskGraph) CreateNode(labels ...string) (*Node, error) {
 
 // createNodeUnlocked creates a node (caller must hold write lock)
 func (g *DiskGraph) createNodeUnlocked(labels ...string) (*Node, error) {
+	return g.createNodeAtTimeUnlocked(time.Now(), labels...)
+}
+
+// createNodeAtTimeUnlocked creates a node with a custom ValidFrom timestamp (caller must hold write lock)
+func (g *DiskGraph) createNodeAtTimeUnlocked(validFrom time.Time, labels ...string) (*Node, error) {
 	node := &Node{
 		ID:         uuid.New().String(),
 		Labels:     labels,
 		Properties: make(map[string]interface{}),
-		ValidFrom:  time.Now(),
+		ValidFrom:  validFrom,
 	}
 
 	if err := g.boltStore.SaveNode(node); err != nil {

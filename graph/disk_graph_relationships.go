@@ -204,13 +204,18 @@ func (g *DiskGraph) GetNodeEmbedding(nodeID string) *Embedding {
 
 // createRelationshipUnlocked creates a relationship (caller must hold write lock)
 func (g *DiskGraph) createRelationshipUnlocked(relType, fromID, toID string) (*Relationship, error) {
+	return g.createRelationshipAtTimeUnlocked(time.Now(), relType, fromID, toID)
+}
+
+// createRelationshipAtTimeUnlocked creates a relationship with a custom ValidFrom timestamp (caller must hold write lock)
+func (g *DiskGraph) createRelationshipAtTimeUnlocked(validFrom time.Time, relType, fromID, toID string) (*Relationship, error) {
 	rel := &Relationship{
 		ID:         uuid.New().String(),
 		Type:       relType,
 		FromNodeID: fromID,
 		ToNodeID:   toID,
 		Properties: make(map[string]interface{}),
-		ValidFrom:  time.Now(),
+		ValidFrom:  validFrom,
 	}
 
 	if err := g.boltStore.SaveRelationship(rel); err != nil {

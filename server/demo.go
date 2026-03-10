@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"time"
 
 	"github.com/MironCo/gravecdb/client"
@@ -24,881 +21,222 @@ func loadDemoData() {
 		}
 		defer conn.Close()
 
-		log.Println("Loading demo data using query language...")
+		log.Println("Loading demo data with historical timestamps...")
 
-		// Create people
-		createResult, err := conn.Query(`CREATE (alice:Person {name: "Alice", role: "backend engineer"})`)
-		if err != nil {
-			log.Printf("Failed to create Alice: %v", err)
-		} else {
-			log.Printf("Created Alice, result columns: %v, rows: %d", createResult.Columns, len(createResult.Rows))
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (bob:Person {name: "Bob", role: "frontend developer"})`)
-		if err != nil {
-			log.Printf("Failed to create Bob: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (carol:Person {name: "Carol", role: "engineering manager"})`)
-		if err != nil {
-			log.Printf("Failed to create Carol: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (david:Person {name: "David", role: "devops engineer"})`)
-		if err != nil {
-			log.Printf("Failed to create David: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (eve:Person {name: "Eve", role: "product manager"})`)
-		if err != nil {
-			log.Printf("Failed to create Eve: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (frank:Person {name: "Frank", role: "data scientist"})`)
-		if err != nil {
-			log.Printf("Failed to create Frank: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (grace:Person {name: "Grace", role: "UX designer"})`)
-		if err != nil {
-			log.Printf("Failed to create Grace: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (henry:Person {name: "Henry", role: "QA engineer"})`)
-		if err != nil {
-			log.Printf("Failed to create Henry: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (isabel:Person {name: "Isabel", role: "security engineer"})`)
-		if err != nil {
-			log.Printf("Failed to create Isabel: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (jack:Person {name: "Jack", role: "platform engineer"})`)
-		if err != nil {
-			log.Printf("Failed to create Jack: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (kate:Person {name: "Kate", role: "engineering manager"})`)
-		if err != nil {
-			log.Printf("Failed to create Kate: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (liam:Person {name: "Liam", role: "backend engineer"})`)
-		if err != nil {
-			log.Printf("Failed to create Liam: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (maya:Person {name: "Maya", role: "ML engineer"})`)
-		if err != nil {
-			log.Printf("Failed to create Maya: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		// Create skills
-		_, err = conn.Query(`CREATE (s1:Skill {name: "Go", category: "backend"})`)
-		if err != nil {
-			log.Printf("Failed to create Go skill: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (s2:Skill {name: "Python", category: "data"})`)
-		if err != nil {
-			log.Printf("Failed to create Python skill: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (s3:Skill {name: "Kubernetes", category: "infrastructure"})`)
-		if err != nil {
-			log.Printf("Failed to create Kubernetes skill: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (s4:Skill {name: "React", category: "frontend"})`)
-		if err != nil {
-			log.Printf("Failed to create React skill: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (s5:Skill {name: "Machine Learning", category: "data"})`)
-		if err != nil {
-			log.Printf("Failed to create ML skill: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		// Create companies
-		_, err = conn.Query(`CREATE (tc:Company {name: "TechCorp"})`)
-		if err != nil {
-			log.Printf("Failed to create TechCorp: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (startup:Company {name: "CoolStartup"})`)
-		if err != nil {
-			log.Printf("Failed to create CoolStartup: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (bigco:Company {name: "BigCo"})`)
-		if err != nil {
-			log.Printf("Failed to create BigCo: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		// Create projects
-		_, err = conn.Query(`CREATE (proj1:Project {name: "Platform Rewrite", status: "in progress"})`)
-		if err != nil {
-			log.Printf("Failed to create Platform Rewrite: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`CREATE (proj2:Project {name: "Mobile App", status: "planning"})`)
-		if err != nil {
-			log.Printf("Failed to create Mobile App: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		// Initial employment
-		_, err = conn.Query(`MATCH (alice:Person {name: "Alice"}), (tc:Company {name: "TechCorp"}) CREATE (alice)-[:WORKS_AT {title: "Junior Engineer"}]->(tc)`)
-		if err != nil {
-			log.Printf("Failed to create Alice's job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (bob:Person {name: "Bob"}), (tc:Company {name: "TechCorp"}) CREATE (bob)-[:WORKS_AT {title: "Senior Designer"}]->(tc)`)
-		if err != nil {
-			log.Printf("Failed to create Bob's job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (carol:Person {name: "Carol"}), (tc:Company {name: "TechCorp"}) CREATE (carol)-[:WORKS_AT {title: "Engineering Manager"}]->(tc)`)
-		if err != nil {
-			log.Printf("Failed to create Carol's job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (david:Person {name: "David"}), (bc:Company {name: "BigCo"}) CREATE (david)-[:WORKS_AT {title: "DevOps Engineer"}]->(bc)`)
-		if err != nil {
-			log.Printf("Failed to create David's job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (eve:Person {name: "Eve"}), (s:Company {name: "CoolStartup"}) CREATE (eve)-[:WORKS_AT {title: "Product Manager"}]->(s)`)
-		if err != nil {
-			log.Printf("Failed to create Eve's job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (frank:Person {name: "Frank"}), (bc:Company {name: "BigCo"}) CREATE (frank)-[:WORKS_AT {title: "Senior Data Scientist"}]->(bc)`)
-		if err != nil {
-			log.Printf("Failed to create Frank's job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (grace:Person {name: "Grace"}), (s:Company {name: "CoolStartup"}) CREATE (grace)-[:WORKS_AT {title: "Lead UX Designer"}]->(s)`)
-		if err != nil {
-			log.Printf("Failed to create Grace's job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (henry:Person {name: "Henry"}), (tc:Company {name: "TechCorp"}) CREATE (henry)-[:WORKS_AT {title: "QA Lead"}]->(tc)`)
-		if err != nil {
-			log.Printf("Failed to create Henry's job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (isabel:Person {name: "Isabel"}), (tc:Company {name: "TechCorp"}) CREATE (isabel)-[:WORKS_AT {title: "Security Engineer"}]->(tc)`)
-		if err != nil {
-			log.Printf("Failed to create Isabel's job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (jack:Person {name: "Jack"}), (bc:Company {name: "BigCo"}) CREATE (jack)-[:WORKS_AT {title: "Senior Platform Engineer"}]->(bc)`)
-		if err != nil {
-			log.Printf("Failed to create Jack's job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (kate:Person {name: "Kate"}), (s:Company {name: "CoolStartup"}) CREATE (kate)-[:WORKS_AT {title: "Engineering Manager"}]->(s)`)
-		if err != nil {
-			log.Printf("Failed to create Kate's job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (liam:Person {name: "Liam"}), (bc:Company {name: "BigCo"}) CREATE (liam)-[:WORKS_AT {title: "Backend Engineer"}]->(bc)`)
-		if err != nil {
-			log.Printf("Failed to create Liam's job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (maya:Person {name: "Maya"}), (s:Company {name: "CoolStartup"}) CREATE (maya)-[:WORKS_AT {title: "ML Engineer"}]->(s)`)
-		if err != nil {
-			log.Printf("Failed to create Maya's job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		// Skill assignments
-		_, err = conn.Query(`MATCH (alice:Person {name: "Alice"}), (sk:Skill {name: "Go"}) CREATE (alice)-[:HAS_SKILL {level: "expert"}]->(sk)`)
-		if err != nil {
-			log.Printf("Failed to assign Go to Alice: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (liam:Person {name: "Liam"}), (sk:Skill {name: "Go"}) CREATE (liam)-[:HAS_SKILL {level: "intermediate"}]->(sk)`)
-		if err != nil {
-			log.Printf("Failed to assign Go to Liam: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (jack:Person {name: "Jack"}), (sk:Skill {name: "Kubernetes"}) CREATE (jack)-[:HAS_SKILL {level: "expert"}]->(sk)`)
-		if err != nil {
-			log.Printf("Failed to assign Kubernetes to Jack: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (david:Person {name: "David"}), (sk:Skill {name: "Kubernetes"}) CREATE (david)-[:HAS_SKILL {level: "expert"}]->(sk)`)
-		if err != nil {
-			log.Printf("Failed to assign Kubernetes to David: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (frank:Person {name: "Frank"}), (sk:Skill {name: "Python"}) CREATE (frank)-[:HAS_SKILL {level: "expert"}]->(sk)`)
-		if err != nil {
-			log.Printf("Failed to assign Python to Frank: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (maya:Person {name: "Maya"}), (sk:Skill {name: "Python"}) CREATE (maya)-[:HAS_SKILL {level: "expert"}]->(sk)`)
-		if err != nil {
-			log.Printf("Failed to assign Python to Maya: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (maya:Person {name: "Maya"}), (sk:Skill {name: "Machine Learning"}) CREATE (maya)-[:HAS_SKILL {level: "expert"}]->(sk)`)
-		if err != nil {
-			log.Printf("Failed to assign ML to Maya: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (bob:Person {name: "Bob"}), (sk:Skill {name: "React"}) CREATE (bob)-[:HAS_SKILL {level: "expert"}]->(sk)`)
-		if err != nil {
-			log.Printf("Failed to assign React to Bob: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		// Reporting structure
-		_, err = conn.Query(`MATCH (alice:Person {name: "Alice"}), (carol:Person {name: "Carol"}) CREATE (alice)-[:REPORTS_TO]->(carol)`)
-		if err != nil {
-			log.Printf("Failed to create Alice->Carol reporting: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (henry:Person {name: "Henry"}), (carol:Person {name: "Carol"}) CREATE (henry)-[:REPORTS_TO]->(carol)`)
-		if err != nil {
-			log.Printf("Failed to create Henry->Carol reporting: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (liam:Person {name: "Liam"}), (jack:Person {name: "Jack"}) CREATE (liam)-[:REPORTS_TO]->(jack)`)
-		if err != nil {
-			log.Printf("Failed to create Liam->Jack reporting: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (maya:Person {name: "Maya"}), (kate:Person {name: "Kate"}) CREATE (maya)-[:REPORTS_TO]->(kate)`)
-		if err != nil {
-			log.Printf("Failed to create Maya->Kate reporting: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		// Friendships
-		_, err = conn.Query(`MATCH (alice:Person {name: "Alice"}), (bob:Person {name: "Bob"}) CREATE (alice)-[:FRIENDS_WITH {since: 2020}]->(bob)`)
-		if err != nil {
-			log.Printf("Failed to create Alice-Bob friendship: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (bob:Person {name: "Bob"}), (david:Person {name: "David"}) CREATE (bob)-[:FRIENDS_WITH {since: 2019}]->(david)`)
-		if err != nil {
-			log.Printf("Failed to create Bob-David friendship: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (carol:Person {name: "Carol"}), (eve:Person {name: "Eve"}) CREATE (carol)-[:FRIENDS_WITH {since: 2021}]->(eve)`)
-		if err != nil {
-			log.Printf("Failed to create Carol-Eve friendship: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (frank:Person {name: "Frank"}), (maya:Person {name: "Maya"}) CREATE (frank)-[:FRIENDS_WITH {since: 2022}]->(maya)`)
-		if err != nil {
-			log.Printf("Failed to create Frank-Maya friendship: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (jack:Person {name: "Jack"}), (david:Person {name: "David"}) CREATE (jack)-[:FRIENDS_WITH {since: 2020}]->(david)`)
-		if err != nil {
-			log.Printf("Failed to create Jack-David friendship: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (isabel:Person {name: "Isabel"}), (henry:Person {name: "Henry"}) CREATE (isabel)-[:FRIENDS_WITH {since: 2023}]->(henry)`)
-		if err != nil {
-			log.Printf("Failed to create Isabel-Henry friendship: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		// Mentorship
-		_, err = conn.Query(`MATCH (carol:Person {name: "Carol"}), (alice:Person {name: "Alice"}) CREATE (carol)-[:MENTORS {started: 2021}]->(alice)`)
-		if err != nil {
-			log.Printf("Failed to create Carol mentors Alice: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (frank:Person {name: "Frank"}), (alice:Person {name: "Alice"}) CREATE (frank)-[:MENTORS {started: 2022}]->(alice)`)
-		if err != nil {
-			log.Printf("Failed to create Frank mentors Alice: %v", err)
-		}
-		time.Sleep(200 * time.Millisecond)
-
-		// Alice gets promoted - update her role property and job relationship
-		// Get Alice's ID first
-		aliceResult, err := conn.Query(`MATCH (alice:Person {name: "Alice"}) RETURN alice`)
-		if err == nil && len(aliceResult.Rows) > 0 {
-			if aliceNode, ok := aliceResult.Rows[0]["alice"].(map[string]interface{}); ok {
-				if aliceID, ok := aliceNode["id"].(string); ok {
-					// Update role property via HTTP API
-					updatePayload := map[string]interface{}{
-						"key":   "role",
-						"value": "senior engineer",
-					}
-					payloadBytes, _ := json.Marshal(updatePayload)
-					req, _ := http.NewRequest("PUT",
-						fmt.Sprintf("http://localhost:%d/api/nodes/%s/properties", serverConfig.Port, aliceID),
-						bytes.NewBuffer(payloadBytes))
-					req.Header.Set("Content-Type", "application/json")
-					resp, err := http.DefaultClient.Do(req)
-					if err != nil {
-						log.Printf("Failed to update Alice's role: %v", err)
-					} else {
-						resp.Body.Close()
-					}
-				}
+		// Helper to run a query and log errors
+		run := func(desc, query string) {
+			_, err := conn.Query(query)
+			if err != nil {
+				log.Printf("  [FAIL] %s: %v", desc, err)
 			}
 		}
-		time.Sleep(50 * time.Millisecond)
 
-		_, err = conn.Query(`MATCH (alice:Person {name: "Alice"})-[r:WORKS_AT {title: "Junior Engineer"}]->(:Company {name: "TechCorp"}) DELETE r`)
-		if err != nil {
-			log.Printf("Failed to delete Alice's old job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
+		// ============================================================
+		// TIMELINE: A startup called TechCorp grows over ~2 years
+		// ============================================================
+		//
+		// 2023-01-15  TechCorp founded, first hires (Alice, Bob, Carol)
+		// 2023-03-01  First project kicks off, skills tracked
+		// 2023-06-01  Company grows — David, Eve join
+		// 2023-09-01  BigCo and CoolStartup enter the picture
+		// 2024-01-15  Reorg — promotions, new teams
+		// 2024-04-01  People switch companies
+		// 2024-07-01  New projects, collaborations form
+		// 2024-10-01  More hires, mentorship begins
+		// 2025-01-15  Alice promoted to Staff, Eve joins TechCorp
+		// 2025-06-01  Latest state — mature org
+		// ============================================================
 
-		_, err = conn.Query(`MATCH (alice:Person {name: "Alice"}), (tc:Company {name: "TechCorp"}) CREATE (alice)-[:WORKS_AT {title: "Senior Engineer"}]->(tc)`)
-		if err != nil {
-			log.Printf("Failed to create Alice's promotion: %v", err)
-		}
-		time.Sleep(200 * time.Millisecond)
+		// ---- Jan 2023: TechCorp founded, first 3 hires ----
+		log.Println("  2023-01 — TechCorp founded...")
+		run("TechCorp", `CREATE (tc:Company {name: "TechCorp", founded: 2023}) AT TIME 1673740800`)
 
-		// Bob moves to startup
-		_, err = conn.Query(`MATCH (bob:Person {name: "Bob"})-[r:WORKS_AT]->(:Company {name: "TechCorp"}) DELETE r`)
-		if err != nil {
-			log.Printf("Failed to delete Bob's old job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
+		run("Alice", `CREATE (p:Person {name: "Alice", role: "backend engineer"}) AT TIME 1673827200`)
+		run("Bob", `CREATE (p:Person {name: "Bob", role: "frontend developer"}) AT TIME 1673913600`)
+		run("Carol", `CREATE (p:Person {name: "Carol", role: "engineering manager"}) AT TIME 1674000000`)
 
-		_, err = conn.Query(`MATCH (bob:Person {name: "Bob"}), (s:Company {name: "CoolStartup"}) CREATE (bob)-[:WORKS_AT {title: "Design Lead"}]->(s)`)
-		if err != nil {
-			log.Printf("Failed to create Bob's new job: %v", err)
-		}
-		time.Sleep(100 * time.Millisecond)
+		// Initial employment at TechCorp
+		run("Alice@TechCorp", `MATCH (p:Person {name: "Alice"}), (c:Company {name: "TechCorp"}) CREATE (p)-[:WORKS_AT {title: "Junior Engineer"}]->(c) AT TIME 1673827200`)
+		run("Bob@TechCorp", `MATCH (p:Person {name: "Bob"}), (c:Company {name: "TechCorp"}) CREATE (p)-[:WORKS_AT {title: "Frontend Dev"}]->(c) AT TIME 1673913600`)
+		run("Carol@TechCorp", `MATCH (p:Person {name: "Carol"}), (c:Company {name: "TechCorp"}) CREATE (p)-[:WORKS_AT {title: "Engineering Manager"}]->(c) AT TIME 1674000000`)
 
-		// Friendship ends due to job change
-		_, err = conn.Query(`MATCH (alice:Person {name: "Alice"})-[r:FRIENDS_WITH]->(bob:Person {name: "Bob"}) DELETE r`)
-		if err != nil {
-			log.Printf("Failed to delete Alice-Bob friendship: %v", err)
-		}
-		time.Sleep(200 * time.Millisecond)
+		// Reporting structure
+		run("Alice->Carol", `MATCH (a:Person {name: "Alice"}), (c:Person {name: "Carol"}) CREATE (a)-[:REPORTS_TO]->(c) AT TIME 1674000000`)
+		run("Bob->Carol", `MATCH (b:Person {name: "Bob"}), (c:Person {name: "Carol"}) CREATE (b)-[:REPORTS_TO]->(c) AT TIME 1674000000`)
 
-		// David joins startup too
-		_, err = conn.Query(`MATCH (david:Person {name: "David"})-[r:WORKS_AT]->(:Company {name: "BigCo"}) DELETE r`)
-		if err != nil {
-			log.Printf("Failed to delete David's old job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
+		// ---- Mar 2023: Skills and first project ----
+		log.Println("  2023-03 — Skills tracked, first project...")
+		run("Go skill", `CREATE (s:Skill {name: "Go", category: "backend"}) AT TIME 1677628800`)
+		run("React skill", `CREATE (s:Skill {name: "React", category: "frontend"}) AT TIME 1677628800`)
+		run("Python skill", `CREATE (s:Skill {name: "Python", category: "data"}) AT TIME 1677628800`)
+		run("K8s skill", `CREATE (s:Skill {name: "Kubernetes", category: "infrastructure"}) AT TIME 1677628800`)
+		run("ML skill", `CREATE (s:Skill {name: "Machine Learning", category: "data"}) AT TIME 1677628800`)
 
-		_, err = conn.Query(`MATCH (david:Person {name: "David"}), (s:Company {name: "CoolStartup"}) CREATE (david)-[:WORKS_AT {title: "Lead DevOps"}]->(s)`)
-		if err != nil {
-			log.Printf("Failed to create David's new job: %v", err)
-		}
-		time.Sleep(100 * time.Millisecond)
+		run("Alice+Go", `MATCH (p:Person {name: "Alice"}), (s:Skill {name: "Go"}) CREATE (p)-[:HAS_SKILL {level: "expert"}]->(s) AT TIME 1677628800`)
+		run("Bob+React", `MATCH (p:Person {name: "Bob"}), (s:Skill {name: "React"}) CREATE (p)-[:HAS_SKILL {level: "expert"}]->(s) AT TIME 1677628800`)
 
-		// Collaboration relationships
-		_, err = conn.Query(`MATCH (bob:Person {name: "Bob"}), (david:Person {name: "David"}) CREATE (bob)-[:COLLABORATES {project: "Platform"}]->(david)`)
-		if err != nil {
-			log.Printf("Failed to create Bob-David collaboration: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
+		run("Platform project", `CREATE (p:Project {name: "Platform Rewrite", status: "in progress"}) AT TIME 1677715200`)
+		run("Alice on Platform", `MATCH (p:Person {name: "Alice"}), (proj:Project {name: "Platform Rewrite"}) CREATE (p)-[:WORKS_ON {role: "tech lead"}]->(proj) AT TIME 1677715200`)
 
-		_, err = conn.Query(`MATCH (eve:Person {name: "Eve"}), (bob:Person {name: "Bob"}) CREATE (eve)-[:COLLABORATES {project: "Product"}]->(bob)`)
-		if err != nil {
-			log.Printf("Failed to create Eve-Bob collaboration: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
+		// Friendship forms early
+		run("Alice-Bob friends", `MATCH (a:Person {name: "Alice"}), (b:Person {name: "Bob"}) CREATE (a)-[:FRIENDS_WITH {since: 2023}]->(b) AT TIME 1677715200`)
 
-		// Assign people to projects
-		_, err = conn.Query(`MATCH (bob:Person {name: "Bob"}), (p:Project {name: "Platform Rewrite"}) CREATE (bob)-[:WORKS_ON {role: "tech lead"}]->(p)`)
-		if err != nil {
-			log.Printf("Failed to assign Bob to project: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
+		// ---- Jun 2023: Growth — David and Eve join ----
+		log.Println("  2023-06 — David and Eve join...")
+		run("David", `CREATE (p:Person {name: "David", role: "devops engineer"}) AT TIME 1685577600`)
+		run("Eve", `CREATE (p:Person {name: "Eve", role: "product manager"}) AT TIME 1685664000`)
 
-		_, err = conn.Query(`MATCH (grace:Person {name: "Grace"}), (p:Project {name: "Mobile App"}) CREATE (grace)-[:WORKS_ON {role: "design lead"}]->(p)`)
-		if err != nil {
-			log.Printf("Failed to assign Grace to project: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
+		run("David@TechCorp", `MATCH (p:Person {name: "David"}), (c:Company {name: "TechCorp"}) CREATE (p)-[:WORKS_AT {title: "DevOps Engineer"}]->(c) AT TIME 1685577600`)
+		run("Eve@TechCorp", `MATCH (p:Person {name: "Eve"}), (c:Company {name: "TechCorp"}) CREATE (p)-[:WORKS_AT {title: "Product Manager"}]->(c) AT TIME 1685664000`)
 
-		_, err = conn.Query(`MATCH (david:Person {name: "David"}), (p:Project {name: "Platform Rewrite"}) CREATE (david)-[:WORKS_ON {role: "infrastructure"}]->(p)`)
-		if err != nil {
-			log.Printf("Failed to assign David to project: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
+		run("David+K8s", `MATCH (p:Person {name: "David"}), (s:Skill {name: "Kubernetes"}) CREATE (p)-[:HAS_SKILL {level: "expert"}]->(s) AT TIME 1685577600`)
+		run("David on Platform", `MATCH (p:Person {name: "David"}), (proj:Project {name: "Platform Rewrite"}) CREATE (p)-[:WORKS_ON {role: "infrastructure"}]->(proj) AT TIME 1685577600`)
+
+		run("Bob-David friends", `MATCH (b:Person {name: "Bob"}), (d:Person {name: "David"}) CREATE (b)-[:FRIENDS_WITH {since: 2023}]->(d) AT TIME 1685664000`)
+
+		// ---- Sep 2023: Other companies appear ----
+		log.Println("  2023-09 — BigCo and CoolStartup enter...")
+		run("BigCo", `CREATE (c:Company {name: "BigCo", founded: 2010}) AT TIME 1693526400`)
+		run("CoolStartup", `CREATE (c:Company {name: "CoolStartup", founded: 2023}) AT TIME 1693526400`)
+
+		// More people
+		run("Frank", `CREATE (p:Person {name: "Frank", role: "data scientist"}) AT TIME 1693612800`)
+		run("Grace", `CREATE (p:Person {name: "Grace", role: "UX designer"}) AT TIME 1693699200`)
+		run("Henry", `CREATE (p:Person {name: "Henry", role: "QA engineer"}) AT TIME 1693785600`)
+
+		run("Frank@BigCo", `MATCH (p:Person {name: "Frank"}), (c:Company {name: "BigCo"}) CREATE (p)-[:WORKS_AT {title: "Senior Data Scientist"}]->(c) AT TIME 1693612800`)
+		run("Grace@CoolStartup", `MATCH (p:Person {name: "Grace"}), (c:Company {name: "CoolStartup"}) CREATE (p)-[:WORKS_AT {title: "Lead UX Designer"}]->(c) AT TIME 1693699200`)
+		run("Henry@TechCorp", `MATCH (p:Person {name: "Henry"}), (c:Company {name: "TechCorp"}) CREATE (p)-[:WORKS_AT {title: "QA Lead"}]->(c) AT TIME 1693785600`)
+
+		run("Henry->Carol", `MATCH (h:Person {name: "Henry"}), (c:Person {name: "Carol"}) CREATE (h)-[:REPORTS_TO]->(c) AT TIME 1693785600`)
+		run("Frank+Python", `MATCH (p:Person {name: "Frank"}), (s:Skill {name: "Python"}) CREATE (p)-[:HAS_SKILL {level: "expert"}]->(s) AT TIME 1693612800`)
+		run("Frank+ML", `MATCH (p:Person {name: "Frank"}), (s:Skill {name: "Machine Learning"}) CREATE (p)-[:HAS_SKILL {level: "intermediate"}]->(s) AT TIME 1693612800`)
+
+		run("Frank-Maya friends", `MATCH (f:Person {name: "Frank"}), (g:Person {name: "Grace"}) CREATE (f)-[:FRIENDS_WITH {since: 2023}]->(g) AT TIME 1693699200`)
+
+		// ---- Jan 2024: Reorg — Alice promoted, new hires ----
+		log.Println("  2024-01 — Reorg and promotions...")
+		run("Isabel", `CREATE (p:Person {name: "Isabel", role: "security engineer"}) AT TIME 1705276800`)
+		run("Jack", `CREATE (p:Person {name: "Jack", role: "platform engineer"}) AT TIME 1705363200`)
+
+		run("Isabel@TechCorp", `MATCH (p:Person {name: "Isabel"}), (c:Company {name: "TechCorp"}) CREATE (p)-[:WORKS_AT {title: "Security Engineer"}]->(c) AT TIME 1705276800`)
+		run("Jack@BigCo", `MATCH (p:Person {name: "Jack"}), (c:Company {name: "BigCo"}) CREATE (p)-[:WORKS_AT {title: "Senior Platform Engineer"}]->(c) AT TIME 1705363200`)
+
+		run("Isabel-Henry friends", `MATCH (i:Person {name: "Isabel"}), (h:Person {name: "Henry"}) CREATE (i)-[:FRIENDS_WITH {since: 2024}]->(h) AT TIME 1705363200`)
+		run("Jack-David friends", `MATCH (j:Person {name: "Jack"}), (d:Person {name: "David"}) CREATE (j)-[:FRIENDS_WITH {since: 2024}]->(d) AT TIME 1705363200`)
+
+		// Alice promoted: delete old WORKS_AT, create new one
+		run("Alice promo delete", `MATCH (p:Person {name: "Alice"})-[r:WORKS_AT]->(:Company {name: "TechCorp"}) DELETE r`)
+		run("Alice promo", `MATCH (p:Person {name: "Alice"}), (c:Company {name: "TechCorp"}) CREATE (p)-[:WORKS_AT {title: "Senior Engineer"}]->(c) AT TIME 1705449600`)
+		run("Alice role update", `MATCH (p:Person {name: "Alice"}) SET p.role = "senior engineer"`)
+
+		// Carol mentors Alice
+		run("Carol mentors Alice", `MATCH (c:Person {name: "Carol"}), (a:Person {name: "Alice"}) CREATE (c)-[:MENTORS {started: 2024}]->(a) AT TIME 1705449600`)
+
+		// ---- Apr 2024: People switch companies ----
+		log.Println("  2024-04 — Bob and David move to CoolStartup...")
+
+		// Bob leaves TechCorp for CoolStartup
+		run("Bob leaves TechCorp", `MATCH (p:Person {name: "Bob"})-[r:WORKS_AT]->(:Company {name: "TechCorp"}) DELETE r`)
+		run("Bob@CoolStartup", `MATCH (p:Person {name: "Bob"}), (c:Company {name: "CoolStartup"}) CREATE (p)-[:WORKS_AT {title: "Design Lead"}]->(c) AT TIME 1711929600`)
+
+		// Alice-Bob friendship ends when Bob leaves
+		run("Alice-Bob unfriend", `MATCH (a:Person {name: "Alice"})-[r:FRIENDS_WITH]->(b:Person {name: "Bob"}) DELETE r`)
+
+		// David leaves TechCorp for CoolStartup
+		run("David leaves TechCorp", `MATCH (p:Person {name: "David"})-[r:WORKS_AT]->(:Company {name: "TechCorp"}) DELETE r`)
+		run("David@CoolStartup", `MATCH (p:Person {name: "David"}), (c:Company {name: "CoolStartup"}) CREATE (p)-[:WORKS_AT {title: "Lead DevOps"}]->(c) AT TIME 1711929600`)
+
+		// ---- Jul 2024: New projects, collaborations ----
+		log.Println("  2024-07 — New projects and collaborations...")
+		run("Mobile App", `CREATE (p:Project {name: "Mobile App", status: "planning"}) AT TIME 1719792000`)
+		run("Grace on Mobile", `MATCH (p:Person {name: "Grace"}), (proj:Project {name: "Mobile App"}) CREATE (p)-[:WORKS_ON {role: "design lead"}]->(proj) AT TIME 1719792000`)
+		run("Bob on Platform", `MATCH (p:Person {name: "Bob"}), (proj:Project {name: "Platform Rewrite"}) CREATE (p)-[:WORKS_ON {role: "frontend"}]->(proj) AT TIME 1719792000`)
+
+		run("Bob-David collab", `MATCH (b:Person {name: "Bob"}), (d:Person {name: "David"}) CREATE (b)-[:COLLABORATES {project: "Platform"}]->(d) AT TIME 1719792000`)
+		run("Eve-Bob collab", `MATCH (e:Person {name: "Eve"}), (b:Person {name: "Bob"}) CREATE (e)-[:COLLABORATES {project: "Product"}]->(b) AT TIME 1719878400`)
+
+		// More hires
+		run("Kate", `CREATE (p:Person {name: "Kate", role: "engineering manager"}) AT TIME 1719878400`)
+		run("Kate@CoolStartup", `MATCH (p:Person {name: "Kate"}), (c:Company {name: "CoolStartup"}) CREATE (p)-[:WORKS_AT {title: "Engineering Manager"}]->(c) AT TIME 1719878400`)
+
+		run("Liam", `CREATE (p:Person {name: "Liam", role: "backend engineer"}) AT TIME 1719964800`)
+		run("Liam@BigCo", `MATCH (p:Person {name: "Liam"}), (c:Company {name: "BigCo"}) CREATE (p)-[:WORKS_AT {title: "Backend Engineer"}]->(c) AT TIME 1719964800`)
+		run("Liam+Go", `MATCH (p:Person {name: "Liam"}), (s:Skill {name: "Go"}) CREATE (p)-[:HAS_SKILL {level: "intermediate"}]->(s) AT TIME 1719964800`)
+
+		run("Liam->Jack", `MATCH (l:Person {name: "Liam"}), (j:Person {name: "Jack"}) CREATE (l)-[:REPORTS_TO]->(j) AT TIME 1719964800`)
+
+		// ---- Oct 2024: Mentorship, Maya joins ----
+		log.Println("  2024-10 — Maya joins, mentorship grows...")
+		run("Maya", `CREATE (p:Person {name: "Maya", role: "ML engineer"}) AT TIME 1727740800`)
+		run("Maya@CoolStartup", `MATCH (p:Person {name: "Maya"}), (c:Company {name: "CoolStartup"}) CREATE (p)-[:WORKS_AT {title: "ML Engineer"}]->(c) AT TIME 1727740800`)
+		run("Maya+Python", `MATCH (p:Person {name: "Maya"}), (s:Skill {name: "Python"}) CREATE (p)-[:HAS_SKILL {level: "expert"}]->(s) AT TIME 1727740800`)
+		run("Maya+ML", `MATCH (p:Person {name: "Maya"}), (s:Skill {name: "Machine Learning"}) CREATE (p)-[:HAS_SKILL {level: "expert"}]->(s) AT TIME 1727740800`)
+		run("Maya->Kate", `MATCH (m:Person {name: "Maya"}), (k:Person {name: "Kate"}) CREATE (m)-[:REPORTS_TO]->(k) AT TIME 1727740800`)
+
+		run("Frank mentors Alice", `MATCH (f:Person {name: "Frank"}), (a:Person {name: "Alice"}) CREATE (f)-[:MENTORS {started: 2024}]->(a) AT TIME 1727827200`)
+		run("Carol-Eve friends", `MATCH (c:Person {name: "Carol"}), (e:Person {name: "Eve"}) CREATE (c)-[:FRIENDS_WITH {since: 2024}]->(e) AT TIME 1727827200`)
+		run("Frank-Maya friends", `MATCH (f:Person {name: "Frank"}), (m:Person {name: "Maya"}) CREATE (f)-[:FRIENDS_WITH {since: 2024}]->(m) AT TIME 1727827200`)
+
+		// ---- Jan 2025: Alice staff promo, Eve switches to TechCorp ----
+		log.Println("  2025-01 — Alice promoted to Staff, Eve joins TechCorp...")
+
+		// Alice -> Staff Engineer
+		run("Alice promo2 delete", `MATCH (p:Person {name: "Alice"})-[r:WORKS_AT]->(:Company {name: "TechCorp"}) DELETE r`)
+		run("Alice staff", `MATCH (p:Person {name: "Alice"}), (c:Company {name: "TechCorp"}) CREATE (p)-[:WORKS_AT {title: "Staff Engineer"}]->(c) AT TIME 1736899200`)
+		run("Alice role staff", `MATCH (p:Person {name: "Alice"}) SET p.role = "staff engineer"`)
+
+		// Eve leaves TechCorp, joins... wait she was already at TechCorp. Let me check.
+		// Eve was at TechCorp since Jun 2023. She moves to CoolStartup first? No — let's say Eve goes from TechCorp to Director role.
+		run("Eve promo delete", `MATCH (p:Person {name: "Eve"})-[r:WORKS_AT]->(:Company {name: "TechCorp"}) DELETE r`)
+		run("Eve director", `MATCH (p:Person {name: "Eve"}), (c:Company {name: "TechCorp"}) CREATE (p)-[:WORKS_AT {title: "Director of Product"}]->(c) AT TIME 1736985600`)
+
+		// Grace moves from CoolStartup to BigCo
+		run("Grace leaves CoolStartup", `MATCH (p:Person {name: "Grace"})-[r:WORKS_AT]->(:Company {name: "CoolStartup"}) DELETE r`)
+		run("Grace@BigCo", `MATCH (p:Person {name: "Grace"}), (c:Company {name: "BigCo"}) CREATE (p)-[:WORKS_AT {title: "VP of Design"}]->(c) AT TIME 1736985600`)
+
+		// New friendship
+		run("Eve-Alice friends", `MATCH (e:Person {name: "Eve"}), (a:Person {name: "Alice"}) CREATE (e)-[:FRIENDS_WITH {since: 2025}]->(a) AT TIME 1736985600`)
+
+		// ---- Jun 2025: Current state ----
+		log.Println("  2025-06 — Current state (mature org)...")
 
 		// Generate embeddings if embedder is available
 		if embedder != nil {
-			log.Println("Generating embeddings for Person nodes...")
+			log.Println("  Generating embeddings for Person nodes...")
 			_, err := conn.Query(`MATCH (p:Person) EMBED p.role RETURN p`)
 			if err != nil {
-				log.Printf("Failed to generate embeddings: %v", err)
+				log.Printf("  [FAIL] generate embeddings: %v", err)
 			} else {
-				log.Println("Embeddings generated successfully")
+				log.Println("  Embeddings generated successfully")
 			}
 		}
 
-		// Demonstrate temporal queries
-		log.Println("Testing temporal queries...")
-		time.Sleep(100 * time.Millisecond)
+		// ---- Summary queries ----
+		log.Println("")
+		log.Println("========== DEMO DATA SUMMARY ==========")
 
-		// Query the graph at the earliest time (before any changes)
-		result, err := conn.Query(`MATCH (p:Person) AT TIME EARLIEST RETURN p`)
-		if err != nil {
-			log.Printf("Failed to query earliest state: %v", err)
-		} else {
-			log.Printf("At earliest time: found %d people", len(result.Rows))
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		// Query Alice's employment history by looking at different time points
-		_, err = conn.Query(`MATCH (alice:Person {name: "Alice"})-[r:WORKS_AT]->(c:Company) RETURN alice, r, c`)
-		if err != nil {
-			log.Printf("Failed to query current Alice's job: %v", err)
-		} else {
-			log.Println("Current state: Alice's job queried successfully")
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		// Test semantic search if embedder is available
-		if embedder != nil {
-			log.Println("Testing semantic search...")
-			_, err = conn.Query(`MATCH (p:Person) SIMILAR TO "software development" RETURN p`)
-			if err != nil {
-				log.Printf("Failed semantic search: %v", err)
-			} else {
-				log.Println("Semantic search completed successfully")
-			}
-			time.Sleep(50 * time.Millisecond)
+		result, err := conn.Query(`MATCH (p:Person) RETURN COUNT(p) AS total`)
+		if err == nil && len(result.Rows) > 0 {
+			log.Printf("  People: %v", result.Rows[0]["total"])
 		}
 
-		// Complex query: Find all current employment relationships
-		result, err = conn.Query(`MATCH (p:Person)-[:WORKS_AT]->(c:Company) RETURN p.name, c.name`)
-		if err != nil {
-			log.Printf("Failed to find employment: %v", err)
-		} else {
-			log.Printf("Current employment: %d relationships found", len(result.Rows))
+		result, err = conn.Query(`MATCH (c:Company) RETURN COUNT(c) AS total`)
+		if err == nil && len(result.Rows) > 0 {
+			log.Printf("  Companies: %v", result.Rows[0]["total"])
+		}
+
+		result, err = conn.Query(`MATCH (p:Person)-[:WORKS_AT]->(c:Company) RETURN c.name, COUNT(p) AS headcount`)
+		if err == nil {
 			for _, row := range result.Rows {
-				log.Printf("  - %v works at %v", row["p.name"], row["c.name"])
+				log.Printf("  %v: %v employees", row["c.name"], row["headcount"])
 			}
 		}
-		time.Sleep(50 * time.Millisecond)
-
-		// Test simpler pattern first
-		result, err = conn.Query(`MATCH (p:Person) RETURN p.name`)
-		if err != nil {
-			log.Printf("Failed to find people: %v", err)
-		} else {
-			log.Printf("Total people in database: %d", len(result.Rows))
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		// Test path finding
-		log.Println("Testing shortest path query...")
-		result, err = conn.Query(`MATCH path = shortestPath((alice:Person {name: "Alice"})-[*]-(bob:Person {name: "Bob"})) RETURN path`)
-		if err != nil {
-			log.Printf("Failed to find shortest path: %v", err)
-		} else {
-			if len(result.Rows) > 0 {
-				log.Println("Shortest path from Alice to Bob found")
-			} else {
-				log.Println("No path found between Alice and Bob (friendship was deleted)")
-			}
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		// Test complex pattern: Find people working on projects
-		result, err = conn.Query(`MATCH (p:Person)-[:WORKS_ON]->(proj:Project) RETURN p.name, proj.name`)
-		if err != nil {
-			log.Printf("Failed to find collaborations: %v", err)
-		} else {
-			log.Printf("Project assignments: %d found", len(result.Rows))
-			for _, row := range result.Rows {
-				log.Printf("  - %v works on %v", row["p.name"], row["proj.name"])
-			}
-		}
-
-		// ============================================
-		// TEMPORAL TOMFOOLERY DEMONSTRATION
-		// ============================================
-		log.Println("")
-		log.Println("========== TEMPORAL TOMFOOLERY ==========")
-		log.Println("")
-
-		// Record the current time for comparison
-		timeAfterSetup := time.Now()
-
-		// Make some more changes with timestamps
-		log.Println("Making more changes to create temporal history...")
-		time.Sleep(200 * time.Millisecond)
-
-		// Alice gets another promotion!
-		// Get Alice's ID again
-		aliceResult, err = conn.Query(`MATCH (alice:Person {name: "Alice"}) RETURN alice`)
-		if err == nil && len(aliceResult.Rows) > 0 {
-			if aliceNode, ok := aliceResult.Rows[0]["alice"].(map[string]interface{}); ok {
-				if aliceID, ok := aliceNode["id"].(string); ok {
-					// Update role property via HTTP API
-					updatePayload := map[string]interface{}{
-						"key":   "role",
-						"value": "staff engineer",
-					}
-					payloadBytes, _ := json.Marshal(updatePayload)
-					req, _ := http.NewRequest("PUT",
-						fmt.Sprintf("http://localhost:%d/api/nodes/%s/properties", serverConfig.Port, aliceID),
-						bytes.NewBuffer(payloadBytes))
-					req.Header.Set("Content-Type", "application/json")
-					resp, err := http.DefaultClient.Do(req)
-					if err != nil {
-						log.Printf("Failed to update Alice's role to staff: %v", err)
-					} else {
-						resp.Body.Close()
-					}
-				}
-			}
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (alice:Person {name: "Alice"})-[r:WORKS_AT]->(c:Company) DELETE r`)
-		if err != nil {
-			log.Printf("Failed to delete Alice's job for second promotion: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (alice:Person {name: "Alice"}), (tc:Company {name: "TechCorp"}) CREATE (alice)-[:WORKS_AT {title: "Staff Engineer"}]->(tc)`)
-		if err != nil {
-			log.Printf("Failed to create Alice's second promotion: %v", err)
-		}
-		time.Sleep(100 * time.Millisecond)
-
-		// Eve quits startup and joins TechCorp
-		_, err = conn.Query(`MATCH (eve:Person {name: "Eve"})-[r:WORKS_AT]->(:Company {name: "CoolStartup"}) DELETE r`)
-		if err != nil {
-			log.Printf("Failed to delete Eve's startup job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (eve:Person {name: "Eve"}), (tc:Company {name: "TechCorp"}) CREATE (eve)-[:WORKS_AT {title: "Director of Product"}]->(tc)`)
-		if err != nil {
-			log.Printf("Failed to create Eve's TechCorp job: %v", err)
-		}
-		time.Sleep(100 * time.Millisecond)
-
-		// Grace moves from startup to BigCo
-		_, err = conn.Query(`MATCH (grace:Person {name: "Grace"})-[r:WORKS_AT]->(:Company {name: "CoolStartup"}) DELETE r`)
-		if err != nil {
-			log.Printf("Failed to delete Grace's startup job: %v", err)
-		}
-		time.Sleep(50 * time.Millisecond)
-
-		_, err = conn.Query(`MATCH (grace:Person {name: "Grace"}), (bc:Company {name: "BigCo"}) CREATE (grace)-[:WORKS_AT {title: "VP of Design"}]->(bc)`)
-		if err != nil {
-			log.Printf("Failed to create Grace's BigCo job: %v", err)
-		}
-		time.Sleep(100 * time.Millisecond)
-
-		// New friendship forms after job changes
-		_, err = conn.Query(`MATCH (eve:Person {name: "Eve"}), (alice:Person {name: "Alice"}) CREATE (eve)-[:FRIENDS_WITH {since: 2024}]->(alice)`)
-		if err != nil {
-			log.Printf("Failed to create Eve-Alice friendship: %v", err)
-		}
-		time.Sleep(100 * time.Millisecond)
-
-		timeAfterAllChanges := time.Now()
-
-		// ---- TEMPORAL QUERY 1: Compare employment NOW vs BEFORE ----
-		log.Println("")
-		log.Println("--- TEMPORAL QUERY 1: Employment changes over time ---")
-
-		// Get current employment
-		result, err = conn.Query(`MATCH (p:Person)-[:WORKS_AT]->(c:Company) RETURN p.name, c.name`)
-		if err != nil {
-			log.Printf("Failed current employment query: %v", err)
-		} else {
-			log.Printf("CURRENT employment (%d):", len(result.Rows))
-			for _, row := range result.Rows {
-				log.Printf("  - %v @ %v", row["p.name"], row["c.name"])
-			}
-		}
-
-		// Get employment at earliest time
-		result, err = conn.Query(`MATCH (p:Person)-[:WORKS_AT]->(c:Company) AT TIME EARLIEST RETURN p.name, c.name`)
-		if err != nil {
-			log.Printf("Failed earliest employment query: %v", err)
-		} else {
-			log.Printf("EARLIEST employment (%d):", len(result.Rows))
-			for _, row := range result.Rows {
-				log.Printf("  - %v @ %v", row["p.name"], row["c.name"])
-			}
-		}
-
-		// ---- TEMPORAL QUERY 2: Track a specific person's job history ----
-		log.Println("")
-		log.Println("--- TEMPORAL QUERY 2: Alice's career progression ---")
-		log.Println("Alice started as Junior Engineer -> Senior Engineer -> Staff Engineer")
-
-		// Query at different times to show progression
-		result, err = conn.Query(`MATCH (alice:Person {name: "Alice"})-[:WORKS_AT]->(c:Company) AT TIME EARLIEST RETURN c.name`)
-		if err != nil {
-			log.Printf("Failed Alice earliest query: %v", err)
-		} else {
-			if len(result.Rows) > 0 {
-				log.Printf("  EARLIEST: Alice worked at %v", result.Rows[0]["c.name"])
-			}
-		}
-
-		result, err = conn.Query(`MATCH (alice:Person {name: "Alice"})-[:WORKS_AT]->(c:Company) RETURN c.name`)
-		if err != nil {
-			log.Printf("Failed Alice current query: %v", err)
-		} else {
-			if len(result.Rows) > 0 {
-				log.Printf("  CURRENT: Alice works at %v (same company, but promoted 3x!)", result.Rows[0]["c.name"])
-			}
-		}
-
-		// ---- TEMPORAL QUERY 3: Who worked at CoolStartup over time ----
-		log.Println("")
-		log.Println("--- TEMPORAL QUERY 3: CoolStartup employee history ---")
-
-		result, err = conn.Query(`MATCH (p:Person)-[:WORKS_AT]->(c:Company {name: "CoolStartup"}) AT TIME EARLIEST RETURN p.name`)
-		if err != nil {
-			log.Printf("Failed CoolStartup earliest query: %v", err)
-		} else {
-			log.Printf("CoolStartup employees (EARLIEST): %d", len(result.Rows))
-			for _, row := range result.Rows {
-				log.Printf("  - %v", row["p.name"])
-			}
-		}
-
-		result, err = conn.Query(`MATCH (p:Person)-[:WORKS_AT]->(c:Company {name: "CoolStartup"}) RETURN p.name`)
-		if err != nil {
-			log.Printf("Failed CoolStartup current query: %v", err)
-		} else {
-			log.Printf("CoolStartup employees (CURRENT): %d", len(result.Rows))
-			for _, row := range result.Rows {
-				log.Printf("  - %v", row["p.name"])
-			}
-		}
-
-		// ---- TEMPORAL QUERY 4: Track friendship changes ----
-		log.Println("")
-		log.Println("--- TEMPORAL QUERY 4: Friendship dynamics ---")
-
-		result, err = conn.Query(`MATCH (a:Person)-[:FRIENDS_WITH]->(b:Person) AT TIME EARLIEST RETURN a.name, b.name`)
-		if err != nil {
-			log.Printf("Failed earliest friendships query: %v", err)
-		} else {
-			log.Printf("Friendships at EARLIEST: %d", len(result.Rows))
-			for _, row := range result.Rows {
-				log.Printf("  - %v <-> %v", row["a.name"], row["b.name"])
-			}
-		}
-
-		result, err = conn.Query(`MATCH (a:Person)-[:FRIENDS_WITH]->(b:Person) RETURN a.name, b.name`)
-		if err != nil {
-			log.Printf("Failed current friendships query: %v", err)
-		} else {
-			log.Printf("Friendships CURRENT: %d", len(result.Rows))
-			for _, row := range result.Rows {
-				log.Printf("  - %v <-> %v", row["a.name"], row["b.name"])
-			}
-		}
-		log.Println("  Note: Alice-Bob friendship was deleted when Bob left TechCorp")
-		log.Println("        Eve-Alice friendship formed after Eve joined TechCorp")
-
-		// ---- TEMPORAL QUERY 5: Company headcount over time ----
-		log.Println("")
-		log.Println("--- TEMPORAL QUERY 5: Company headcount changes ---")
-
-		companies := []string{"TechCorp", "CoolStartup", "BigCo"}
-		for _, company := range companies {
-			earliestQuery := fmt.Sprintf(`MATCH (p:Person)-[:WORKS_AT]->(c:Company {name: "%s"}) AT TIME EARLIEST RETURN p.name`, company)
-			currentQuery := fmt.Sprintf(`MATCH (p:Person)-[:WORKS_AT]->(c:Company {name: "%s"}) RETURN p.name`, company)
-
-			var earliestCount, currentCount int
-			result, err = conn.Query(earliestQuery)
-			if err == nil {
-				earliestCount = len(result.Rows)
-			}
-			result, err = conn.Query(currentQuery)
-			if err == nil {
-				currentCount = len(result.Rows)
-			}
-
-			change := currentCount - earliestCount
-			changeStr := ""
-			if change > 0 {
-				changeStr = fmt.Sprintf("+%d", change)
-			} else if change < 0 {
-				changeStr = fmt.Sprintf("%d", change)
-			} else {
-				changeStr = "no change"
-			}
-			log.Printf("  %s: %d -> %d (%s)", company, earliestCount, currentCount, changeStr)
-		}
-
-		// ========== AGGREGATION & ORDERING DEMO ==========
-		log.Println("")
-		log.Println("========================================")
-		log.Println("  AGGREGATION & ORDERING DEMO")
-		log.Println("========================================")
-
-		// ---- COUNT ----
-		log.Println("")
-		log.Println("--- COUNT Example ---")
-		result, err = conn.Query(`MATCH (p:Person) RETURN COUNT(p) AS total_people`)
-		if err != nil {
-			log.Printf("Failed COUNT query: %v", err)
-		} else {
-			for _, row := range result.Rows {
-				log.Printf("Total people: %v", row["total_people"])
-			}
-		}
-
-		// ---- COUNT per company ----
-		log.Println("")
-		log.Println("--- COUNT with GROUP BY (employees per company) ---")
-		result, err = conn.Query(`MATCH (p:Person)-[:WORKS_AT]->(c:Company) RETURN c.name, COUNT(p) AS employees`)
-		if err != nil {
-			log.Printf("Failed COUNT per company query: %v", err)
-		} else {
-			for _, row := range result.Rows {
-				log.Printf("  %v: %v employees", row["c.name"], row["employees"])
-			}
-		}
-
-		// ---- COLLECT ----
-		log.Println("")
-		log.Println("--- COLLECT Example (employee names per company) ---")
-		result, err = conn.Query(`MATCH (p:Person)-[:WORKS_AT]->(c:Company) RETURN c.name, COLLECT(p.name) AS team`)
-		if err != nil {
-			log.Printf("Failed COLLECT query: %v", err)
-		} else {
-			for _, row := range result.Rows {
-				log.Printf("  %v team: %v", row["c.name"], row["team"])
-			}
-		}
-
-		// ---- ORDER BY ----
-		log.Println("")
-		log.Println("--- ORDER BY Example (people by name) ---")
-		result, err = conn.Query(`MATCH (p:Person) RETURN p.name ORDER BY p.name`)
-		if err != nil {
-			log.Printf("Failed ORDER BY query: %v", err)
-		} else {
-			names := []string{}
-			for _, row := range result.Rows {
-				names = append(names, fmt.Sprintf("%v", row["p.name"]))
-			}
-			log.Printf("  Alphabetical: %v", names)
-		}
-
-		// ---- ORDER BY DESC with LIMIT ----
-		log.Println("")
-		log.Println("--- ORDER BY DESC with LIMIT ---")
-		result, err = conn.Query(`MATCH (p:Person) RETURN p.name ORDER BY p.name DESC LIMIT 3`)
-		if err != nil {
-			log.Printf("Failed ORDER BY DESC LIMIT query: %v", err)
-		} else {
-			names := []string{}
-			for _, row := range result.Rows {
-				names = append(names, fmt.Sprintf("%v", row["p.name"]))
-			}
-			log.Printf("  Last 3 alphabetically: %v", names)
-		}
-
-		// ---- SKIP and LIMIT (pagination) ----
-		log.Println("")
-		log.Println("--- SKIP and LIMIT (pagination) ---")
-		result, err = conn.Query(`MATCH (p:Person) RETURN p.name ORDER BY p.name SKIP 2 LIMIT 3`)
-		if err != nil {
-			log.Printf("Failed SKIP LIMIT query: %v", err)
-		} else {
-			names := []string{}
-			for _, row := range result.Rows {
-				names = append(names, fmt.Sprintf("%v", row["p.name"]))
-			}
-			log.Printf("  Page 2 (skip 2, limit 3): %v", names)
-		}
-
-		// ---- DISTINCT ----
-		log.Println("")
-		log.Println("--- DISTINCT Example (unique roles) ---")
-		result, err = conn.Query(`MATCH (p:Person) RETURN DISTINCT p.role`)
-		if err != nil {
-			log.Printf("Failed DISTINCT query: %v", err)
-		} else {
-			log.Printf("  Unique roles: %d", len(result.Rows))
-			for _, row := range result.Rows {
-				log.Printf("    - %v", row["p.role"])
-			}
-		}
-
-		// ---- Summary ----
-		log.Println("")
-		log.Println("========== TEMPORAL SUMMARY ==========")
-		log.Printf("Timeline span: %v", timeAfterAllChanges.Sub(timeAfterSetup).Round(time.Millisecond))
-		log.Println("Key events tracked:")
-		log.Println("  - Alice: 3 promotions (Junior -> Senior -> Staff Engineer)")
-		log.Println("  - Bob: Left TechCorp for CoolStartup")
-		log.Println("  - David: Left BigCo for CoolStartup")
-		log.Println("  - Eve: Left CoolStartup for TechCorp")
-		log.Println("  - Grace: Left CoolStartup for BigCo")
-		log.Println("  - Friendships: Alice-Bob ended, Eve-Alice formed")
-		log.Println("")
-		log.Println("All temporal data is queryable via AT TIME EARLIEST/LATEST or specific timestamps!")
 
 		log.Println("")
-		log.Println("Demo data loaded successfully - temporal tomfoolery complete!")
+		log.Println("  Timeline spans Jan 2023 → Jun 2025")
+		log.Println("  Use the time slider to explore how the org evolved!")
+		log.Println("")
+		log.Println("Demo data loaded successfully!")
 	}()
 }

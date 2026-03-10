@@ -610,3 +610,95 @@ func TestTemporalFutureQuery(t *testing.T) {
 		t.Error("Expected to find node when querying future time")
 	}
 }
+
+// TestCreateAtTime tests that CREATE ... AT TIME sets a custom ValidFrom timestamp
+func TestCreateAtTime(t *testing.T) {
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
+
+	// Create a node at a specific past timestamp (2021-01-01 00:00:00 UTC)
+	ts := int64(1609459200)
+	query, err := ParseQuery(`CREATE (p:Person {name: 'Alice'}) AT TIME 1609459200`)
+	if err != nil {
+		t.Fatalf("Failed to parse CREATE AT TIME: %v", err)
+	}
+	result, err := db.ExecuteQueryWithEmbedder(query, nil)
+	if err != nil {
+		t.Fatalf("Failed to create node with AT TIME: %v", err)
+	}
+	if len(result.Rows) == 0 {
+		t.Fatal("Expected result rows from CREATE")
+	}
+
+	// Verify the node exists and has the correct timestamp
+	nodes := db.GetNodesByLabel("Person")
+	if len(nodes) != 1 {
+		t.Fatalf("Expected 1 Person node, got %d", len(nodes))
+	}
+	alice := nodes[0]
+	expectedTime := time.Unix(ts, 0)
+	if !alice.ValidFrom.Equal(expectedTime) {
+		t.Errorf("Expected ValidFrom=%v, got %v", expectedTime, alice.ValidFrom)
+	}
+
+	// The node should be visible when querying AT TIME after its creation
+	query, err = ParseQuery(`MATCH (p:Person) AT TIME 1609459201 RETURN p.name`)
+	if err != nil {
+		t.Fatalf("Failed to parse AT TIME query: %v", err)
+	}
+	result, err = db.ExecuteQueryWithEmbedder(query, nil)
+	if err != nil {
+		t.Fatalf("Failed AT TIME query: %v", err)
+	}
+	if len(result.Rows) != 1 {
+		t.Fatalf("Expected 1 row at time after creation, got %d", len(result.Rows))
+	}
+
+	// The node should NOT be visible before its creation time
+	query, err = ParseQuery(`MATCH (p:Person) AT TIME 1609459199 RETURN p.name`)
+	if err != nil {
+		t.Fatalf("Failed to parse AT TIME query: %v", err)
+	}
+	result, err = db.ExecuteQueryWithEmbedder(query, nil)
+	if err != nil {
+		t.Fatalf("Failed AT TIME query: %v", err)
+	}
+	if len(result.Rows) != 0 {
+		t.Errorf("Expected 0 rows before creation time, got %d", len(result.Rows))
+	}
+}
+
+// TestCreateRelationshipAtTime tests that CREATE with relationships uses AT TIME
+func TestCreateRelationshipAtTime(t *testing.T) {
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
+
+	ts := int64(1609459200)
+
+	// Create two nodes and a relationship at a past time
+	query, err := ParseQuery(`CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'}) AT TIME 1609459200`)
+	if err != nil {
+		t.Fatalf("Failed to parse: %v", err)
+	}
+	_, err = db.ExecuteQueryWithEmbedder(query, nil)
+	if err != nil {
+		t.Fatalf("Failed to create pattern with AT TIME: %v", err)
+	}
+
+	// Both nodes should have the custom timestamp
+	nodes := db.GetNodesByLabel("Person")
+	expectedTime := time.Unix(ts, 0)
+	for _, n := range nodes {
+		if !n.ValidFrom.Equal(expectedTime) {
+			t.Errorf("Node %v: expected ValidFrom=%v, got %v", n.Properties["name"], expectedTime, n.ValidFrom)
+		}
+	}
+
+	// Relationship should also have the custom timestamp
+	rels, _ := db.GetAllRelationships()
+	for _, r := range rels {
+		if !r.ValidFrom.Equal(expectedTime) {
+			t.Errorf("Relationship: expected ValidFrom=%v, got %v", expectedTime, r.ValidFrom)
+		}
+	}
+}

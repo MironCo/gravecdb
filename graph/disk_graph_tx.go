@@ -46,6 +46,11 @@ func (g *DiskGraph) BeginTransaction() (GraphTransaction, error) {
 
 // CreateNode creates a node within the transaction
 func (t *DiskGraphTransaction) CreateNode(labels ...string) (*Node, error) {
+	return t.CreateNodeAtTime(time.Now(), labels...)
+}
+
+// CreateNodeAtTime creates a node with a custom ValidFrom timestamp within the transaction
+func (t *DiskGraphTransaction) CreateNodeAtTime(validFrom time.Time, labels ...string) (*Node, error) {
 	if t.committed {
 		return nil, fmt.Errorf("transaction already completed")
 	}
@@ -54,7 +59,7 @@ func (t *DiskGraphTransaction) CreateNode(labels ...string) (*Node, error) {
 		ID:         uuid.New().String(),
 		Labels:     labels,
 		Properties: make(map[string]interface{}),
-		ValidFrom:  time.Now(),
+		ValidFrom:  validFrom,
 	}
 
 	if err := t.tx.SaveNode(node); err != nil {
@@ -128,6 +133,11 @@ func (t *DiskGraphTransaction) DeleteNode(nodeID string) error {
 
 // CreateRelationship creates a relationship within the transaction
 func (t *DiskGraphTransaction) CreateRelationship(relType, fromID, toID string) (*Relationship, error) {
+	return t.CreateRelationshipAtTime(time.Now(), relType, fromID, toID)
+}
+
+// CreateRelationshipAtTime creates a relationship with a custom ValidFrom timestamp within the transaction
+func (t *DiskGraphTransaction) CreateRelationshipAtTime(validFrom time.Time, relType, fromID, toID string) (*Relationship, error) {
 	if t.committed {
 		return nil, fmt.Errorf("transaction already completed")
 	}
@@ -149,7 +159,7 @@ func (t *DiskGraphTransaction) CreateRelationship(relType, fromID, toID string) 
 		FromNodeID: fromID,
 		ToNodeID:   toID,
 		Properties: make(map[string]interface{}),
-		ValidFrom:  time.Now(),
+		ValidFrom:  validFrom,
 	}
 
 	if err := t.tx.SaveRelationship(rel); err != nil {
@@ -233,13 +243,19 @@ func (t *DiskGraphTransaction) ExecuteQuery(query *Query, embedder Embedder) (*Q
 
 // executeCreateQuery handles CREATE within a transaction
 func (t *DiskGraphTransaction) executeCreateQuery(query *Query) (*QueryResult, error) {
+	// Determine creation timestamp (AT TIME or now)
+	createTime := time.Now()
+	if query.TimeClause != nil && query.TimeClause.Timestamp > 0 {
+		createTime = time.Unix(query.TimeClause.Timestamp, 0)
+	}
+
 	cc := query.CreateClause
 	createdVars := make(map[string]interface{})
 	createdCount := 0
 
 	// Create nodes
 	for _, nodeSpec := range cc.Nodes {
-		node, err := t.CreateNode(nodeSpec.Labels...)
+		node, err := t.CreateNodeAtTime(createTime, nodeSpec.Labels...)
 		if err != nil {
 			return nil, err
 		}
@@ -267,7 +283,7 @@ func (t *DiskGraphTransaction) executeCreateQuery(query *Query) (*QueryResult, e
 			continue
 		}
 
-		rel, err := t.CreateRelationship(relSpec.Type, fromNode.ID, toNode.ID)
+		rel, err := t.CreateRelationshipAtTime(createTime, relSpec.Type, fromNode.ID, toNode.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -292,13 +308,19 @@ func (t *DiskGraphTransaction) executeCreateQuery(query *Query) (*QueryResult, e
 
 // executeMatchCreateQuery handles MATCH...CREATE within a transaction
 func (t *DiskGraphTransaction) executeMatchCreateQuery(query *Query) (*QueryResult, error) {
+	// Determine creation timestamp (AT TIME or now)
+	createTime := time.Now()
+	if query.TimeClause != nil && query.TimeClause.Timestamp > 0 {
+		createTime = time.Unix(query.TimeClause.Timestamp, 0)
+	}
+
 	// Find matches using the underlying graph's read methods
 	matches := t.findMatches(query.MatchPattern, query.WhereClause)
 
 	createdCount := 0
 	for _, match := range matches {
 		for _, nodeSpec := range query.CreateClause.Nodes {
-			node, err := t.CreateNode(nodeSpec.Labels...)
+			node, err := t.CreateNodeAtTime(createTime, nodeSpec.Labels...)
 			if err != nil {
 				return nil, err
 			}
@@ -321,7 +343,7 @@ func (t *DiskGraphTransaction) executeMatchCreateQuery(query *Query) (*QueryResu
 				continue
 			}
 
-			rel, err := t.CreateRelationship(relSpec.Type, fromID, toID)
+			rel, err := t.CreateRelationshipAtTime(createTime, relSpec.Type, fromID, toID)
 			if err != nil {
 				return nil, err
 			}

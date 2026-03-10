@@ -502,13 +502,19 @@ func (g *DiskGraph) executeCreateQuery(query *Query) (*QueryResult, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	// Determine creation timestamp (AT TIME or now)
+	createTime := time.Now()
+	if query.TimeClause != nil && query.TimeClause.Timestamp > 0 {
+		createTime = time.Unix(query.TimeClause.Timestamp, 0)
+	}
+
 	cc := query.CreateClause
 	createdVars := make(map[string]interface{})
 	createdCount := 0
 
 	// Create nodes
 	for _, nodeSpec := range cc.Nodes {
-		node, err := g.createNodeUnlocked(nodeSpec.Labels...)
+		node, err := g.createNodeAtTimeUnlocked(createTime, nodeSpec.Labels...)
 		if err != nil {
 			return nil, err
 		}
@@ -537,7 +543,7 @@ func (g *DiskGraph) executeCreateQuery(query *Query) (*QueryResult, error) {
 			continue
 		}
 
-		rel, err := g.createRelationshipUnlocked(relSpec.Type, fromNode.ID, toNode.ID)
+		rel, err := g.createRelationshipAtTimeUnlocked(createTime, relSpec.Type, fromNode.ID, toNode.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -570,6 +576,12 @@ func (g *DiskGraph) executeMatchCreateQuery(query *Query) (*QueryResult, error) 
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	// Determine creation timestamp (AT TIME or now)
+	createTime := time.Now()
+	if query.TimeClause != nil && query.TimeClause.Timestamp > 0 {
+		createTime = time.Unix(query.TimeClause.Timestamp, 0)
+	}
+
 	// Use index-based matching instead of loading entire database
 	matches := g.findMatchesUnlocked(query.MatchPattern, query.WhereClause)
 
@@ -590,7 +602,7 @@ func (g *DiskGraph) executeMatchCreateQuery(query *Query) (*QueryResult, error) 
 					continue
 				}
 			}
-			node, err := g.createNodeUnlocked(nodeSpec.Labels...)
+			node, err := g.createNodeAtTimeUnlocked(createTime, nodeSpec.Labels...)
 			if err != nil {
 				continue
 			}
@@ -616,7 +628,7 @@ func (g *DiskGraph) executeMatchCreateQuery(query *Query) (*QueryResult, error) 
 				continue
 			}
 
-			rel, err := g.createRelationshipUnlocked(relSpec.Type, fromNode.ID, toNode.ID)
+			rel, err := g.createRelationshipAtTimeUnlocked(createTime, relSpec.Type, fromNode.ID, toNode.ID)
 			if err != nil {
 				continue
 			}

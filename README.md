@@ -17,6 +17,7 @@ A temporal graph database written in Go with Neo4j Bolt protocol compatibility, 
 - **ACID Transactions** — Explicit `BEGIN`/`COMMIT`/`ROLLBACK` over the Bolt protocol
 - **Vector Embeddings** — Versioned semantic search via Ollama (local) or OpenAI (cloud)
 - **Disk Persistence** — BoltDB backend with B+ tree storage and LRU caching
+- **Graph Algorithms** — PageRank, Louvain community detection via `CALL` procedures with `THROUGH TIME` support
 - **Path Finding** — Shortest path, all paths, temporal Dijkstra (`earliestPath`)
 - **Interactive Visualization** — Vue 3 frontend with time-travel slider and graph inspector
 - **CI/CD** — GitHub Actions pipeline runs Go unit tests + Bolt integration tests on every push
@@ -222,6 +223,28 @@ MATCH (a:Person)-[:KNOWS]->(b:Person)
 WITH b
 MATCH (b)-[:WORKS_AT]->(c:Company)
 RETURN b.name, c.name
+
+-- REMOVE properties or labels
+MATCH (p:Person {name: 'Alice'}) REMOVE p.age
+MATCH (p:Person {name: 'Alice'}) REMOVE p:Temporary
+
+-- FOREACH (iterate and mutate)
+MATCH (p:Person)
+FOREACH (tag IN ['active', 'verified'] | SET p.status = tag)
+
+-- UNION (combine queries, deduplicated)
+MATCH (p:Person) RETURN p.name AS name
+UNION
+MATCH (c:Company) RETURN c.name AS name
+
+-- UNION ALL (combine queries, keep duplicates)
+MATCH (p:Person) RETURN p.name AS name
+UNION ALL
+MATCH (c:Company) RETURN c.name AS name
+
+-- Variable-length relationships
+MATCH (a:Person)-[*2..5]->(b:Person) RETURN a.name, b.name
+MATCH (a:Person)-[:KNOWS*1..3]->(b:Person) RETURN a, b
 ```
 
 ### Temporal Queries
@@ -252,6 +275,11 @@ MATCH (p:Person) SIMILAR TO 'data scientist' THRESHOLD 0.8 RETURN p.name
 MATCH (p:Person)
 SIMILAR TO 'engineer' THROUGH TIME
 RETURN p.name, similarity, valid_from, valid_to
+
+-- Semantic drift analysis (track how embeddings evolve)
+MATCH (p:Person)
+SIMILAR TO 'engineer' THROUGH TIME
+RETURN p.name, similarity, valid_from, valid_to, drift_from_previous, drift_from_first
 ```
 
 ### Path Finding
@@ -269,6 +297,30 @@ RETURN path
 -- "When could a message first have reached Bob from Alice?"
 MATCH path = earliestPath((a:Person {name:'Alice'})-[*]->(b:Person {name:'Bob'}))
 RETURN path, arrival_time
+```
+
+### Graph Algorithms
+
+```cypher
+-- PageRank (configurable damping factor, convergence threshold)
+CALL pagerank() YIELD node, score
+RETURN node.name, score ORDER BY score DESC
+
+-- PageRank filtered by label
+CALL pagerank({label: 'Person'}) YIELD node, score
+RETURN node.name, score
+
+-- Louvain community detection
+CALL louvain() YIELD node, community
+RETURN node.name, community ORDER BY community
+
+-- PageRank through time (track score evolution across topology changes)
+CALL pagerank() YIELD node, score THROUGH TIME
+RETURN node.name, score, valid_from, valid_to
+
+-- Louvain through time (track community shifts)
+CALL louvain() YIELD node, community THROUGH TIME
+RETURN node.name, community, valid_from, valid_to
 ```
 
 ---
@@ -392,10 +444,16 @@ The test suite covers:
 - OR, NOT, IN, IS NULL / IS NOT NULL in WHERE
 - STARTS WITH, ENDS WITH, CONTAINS in WHERE
 - String concatenation in RETURN
+- Variable-length relationships
 - Multi-pattern MATCH (cartesian product)
 - OPTIONAL MATCH
+- UNION / UNION ALL
+- REMOVE (properties and labels)
+- FOREACH
+- CALL procedures (pagerank, louvain)
 - ACID transactions: COMMIT and ROLLBACK over Bolt
 - Semantic search (SIMILAR TO) — skipped if no embedder
+- Semantic drift analysis (THROUGH TIME)
 
 ---
 
