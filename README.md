@@ -523,7 +523,7 @@ Deletes are soft — `ValidTo` is set to now, data is never removed. This enable
 GravecDB uses **BoltDB** (bbolt) as its storage backend:
 - **B+ tree** structure for O(log n) lookups
 - **Single file** database (`gravecdb.db`)
-- **ACID transactions** — atomic, consistent, isolated, durable
+- **ACID transactions** — atomic, consiste nt, isolated, durable
 - **MVCC** — multiple readers don't block writers
 - **LRU caches** for hot nodes and relationships (tunable size)
 - **In-memory label index** for fast label-based lookups
