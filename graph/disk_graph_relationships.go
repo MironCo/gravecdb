@@ -273,13 +273,17 @@ func (g *DiskGraph) getRelationshipsForNodeUnlocked(nodeID string) []*Relationsh
 
 // deleteRelationshipUnlocked deletes a relationship (caller must hold write lock)
 func (g *DiskGraph) deleteRelationshipUnlocked(relID string) error {
+	return g.deleteRelationshipAtTimeUnlocked(relID, time.Now())
+}
+
+// deleteRelationshipAtTimeUnlocked deletes a relationship with a custom ValidTo timestamp (caller must hold write lock)
+func (g *DiskGraph) deleteRelationshipAtTimeUnlocked(relID string, validTo time.Time) error {
 	rel, err := g.boltStore.GetRelationship(relID)
 	if err != nil {
 		return fmt.Errorf("failed to get relationship: %w", err)
 	}
 	if rel != nil {
-		now := time.Now()
-		rel.ValidTo = &now
+		rel.ValidTo = &validTo
 		if err := g.boltStore.SaveRelationship(rel); err != nil {
 			return fmt.Errorf("failed to save relationship: %w", err)
 		}

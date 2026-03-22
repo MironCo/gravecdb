@@ -259,13 +259,17 @@ func (g *DiskGraph) DeleteNode(nodeID string) error {
 
 // deleteNodeUnlocked deletes a node (caller must hold write lock)
 func (g *DiskGraph) deleteNodeUnlocked(nodeID string) error {
+	return g.deleteNodeAtTimeUnlocked(nodeID, time.Now())
+}
+
+// deleteNodeAtTimeUnlocked deletes a node with a custom ValidTo timestamp (caller must hold write lock)
+func (g *DiskGraph) deleteNodeAtTimeUnlocked(nodeID string, validTo time.Time) error {
 	node, err := g.boltStore.GetNode(nodeID)
 	if err != nil {
 		return fmt.Errorf("failed to get node: %w", err)
 	}
 	if node != nil {
-		now := time.Now()
-		node.ValidTo = &now
+		node.ValidTo = &validTo
 		if err := g.boltStore.SaveNode(node); err != nil {
 			return fmt.Errorf("failed to save node: %w", err)
 		}

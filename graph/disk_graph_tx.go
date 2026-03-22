@@ -102,6 +102,11 @@ func (t *DiskGraphTransaction) SetNodeProperty(nodeID, key string, value interfa
 
 // DeleteNode marks a node as deleted within the transaction
 func (t *DiskGraphTransaction) DeleteNode(nodeID string) error {
+	return t.DeleteNodeAtTime(nodeID, time.Now())
+}
+
+// DeleteNodeAtTime soft-deletes a node with a custom ValidTo timestamp within the transaction
+func (t *DiskGraphTransaction) DeleteNodeAtTime(nodeID string, validTo time.Time) error {
 	if t.committed {
 		return fmt.Errorf("transaction already completed")
 	}
@@ -112,10 +117,9 @@ func (t *DiskGraphTransaction) DeleteNode(nodeID string) error {
 		return err
 	}
 
-	now := time.Now()
 	for _, rel := range rels {
 		if rel.ValidTo == nil && (rel.FromNodeID == nodeID || rel.ToNodeID == nodeID) {
-			if err := t.tx.DeleteRelationship(rel.ID, now); err != nil {
+			if err := t.tx.DeleteRelationship(rel.ID, validTo); err != nil {
 				return err
 			}
 			t.deletedRels = append(t.deletedRels, rel.ID)
@@ -123,7 +127,7 @@ func (t *DiskGraphTransaction) DeleteNode(nodeID string) error {
 	}
 
 	// Delete the node
-	if err := t.tx.DeleteNode(nodeID, now); err != nil {
+	if err := t.tx.DeleteNode(nodeID, validTo); err != nil {
 		return err
 	}
 	t.deletedNodes = append(t.deletedNodes, nodeID)
@@ -202,11 +206,16 @@ func (t *DiskGraphTransaction) SetRelationshipProperty(relID, key string, value 
 
 // DeleteRelationship marks a relationship as deleted within the transaction
 func (t *DiskGraphTransaction) DeleteRelationship(relID string) error {
+	return t.DeleteRelationshipAtTime(relID, time.Now())
+}
+
+// DeleteRelationshipAtTime marks a relationship as deleted with a custom ValidTo timestamp within the transaction
+func (t *DiskGraphTransaction) DeleteRelationshipAtTime(relID string, validTo time.Time) error {
 	if t.committed {
 		return fmt.Errorf("transaction already completed")
 	}
 
-	if err := t.tx.DeleteRelationship(relID, time.Now()); err != nil {
+	if err := t.tx.DeleteRelationship(relID, validTo); err != nil {
 		return err
 	}
 	t.deletedRels = append(t.deletedRels, relID)
@@ -392,6 +401,11 @@ func (t *DiskGraphTransaction) executeSetQuery(query *Query) (*QueryResult, erro
 func (t *DiskGraphTransaction) executeDeleteQuery(query *Query) (*QueryResult, error) {
 	matches := t.findMatches(query.MatchPattern, query.WhereClause)
 
+	deleteTime := time.Now()
+	if query.TimeClause != nil && query.TimeClause.Timestamp > 0 {
+		deleteTime = time.Unix(query.TimeClause.Timestamp, 0)
+	}
+
 	deletedCount := 0
 	deletedIDs := make(map[string]bool)
 
@@ -400,7 +414,7 @@ func (t *DiskGraphTransaction) executeDeleteQuery(query *Query) (*QueryResult, e
 			switch v := match[varName].(type) {
 			case *Node:
 				if !deletedIDs[v.ID] {
-					if err := t.DeleteNode(v.ID); err != nil {
+					if err := t.DeleteNodeAtTime(v.ID, deleteTime); err != nil {
 						return nil, err
 					}
 					deletedIDs[v.ID] = true
@@ -408,7 +422,7 @@ func (t *DiskGraphTransaction) executeDeleteQuery(query *Query) (*QueryResult, e
 				}
 			case *Relationship:
 				if !deletedIDs[v.ID] {
-					if err := t.DeleteRelationship(v.ID); err != nil {
+					if err := t.DeleteRelationshipAtTime(v.ID, deleteTime); err != nil {
 						return nil, err
 					}
 					deletedIDs[v.ID] = true

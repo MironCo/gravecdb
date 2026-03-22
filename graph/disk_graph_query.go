@@ -708,6 +708,11 @@ func (g *DiskGraph) executeDeleteQuery(query *Query) (*QueryResult, error) {
 	// Use index-based matching
 	matches := g.findMatchesUnlocked(query.MatchPattern, query.WhereClause)
 
+	deleteTime := time.Now()
+	if query.TimeClause != nil && query.TimeClause.Timestamp > 0 {
+		deleteTime = time.Unix(query.TimeClause.Timestamp, 0)
+	}
+
 	deletedCount := 0
 	for _, match := range matches {
 		for _, varName := range query.DeleteClause.Variables {
@@ -720,13 +725,13 @@ func (g *DiskGraph) executeDeleteQuery(query *Query) (*QueryResult, error) {
 					// Delete relationships first
 					rels := g.getRelationshipsForNodeUnlocked(node.ID)
 					for _, rel := range rels {
-						g.deleteRelationshipUnlocked(rel.ID)
+						g.deleteRelationshipAtTimeUnlocked(rel.ID, deleteTime)
 					}
 				}
-				g.deleteNodeUnlocked(node.ID)
+				g.deleteNodeAtTimeUnlocked(node.ID, deleteTime)
 				deletedCount++
 			} else if rel, ok := entity.(*Relationship); ok {
-				g.deleteRelationshipUnlocked(rel.ID)
+				g.deleteRelationshipAtTimeUnlocked(rel.ID, deleteTime)
 				deletedCount++
 			}
 		}

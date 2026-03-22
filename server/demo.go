@@ -126,7 +126,7 @@ func loadDemoData() {
 		run("Jack-David friends", `MATCH (j:Person {name: "Jack"}), (d:Person {name: "David"}) CREATE (j)-[:FRIENDS_WITH {since: 2024}]->(d) AT TIME 1705363200`)
 
 		// Alice promoted: delete old WORKS_AT, create new one
-		run("Alice promo delete", `MATCH (p:Person {name: "Alice"})-[r:WORKS_AT]->(:Company {name: "TechCorp"}) DELETE r`)
+		run("Alice promo delete", `MATCH (p:Person {name: "Alice"})-[r:WORKS_AT]->(:Company {name: "TechCorp"}) DELETE r AT TIME 1705449600`)
 		run("Alice promo", `MATCH (p:Person {name: "Alice"}), (c:Company {name: "TechCorp"}) CREATE (p)-[:WORKS_AT {title: "Senior Engineer"}]->(c) AT TIME 1705449600`)
 		run("Alice role update", `MATCH (p:Person {name: "Alice"}) SET p.role = "senior engineer"`)
 
@@ -137,14 +137,14 @@ func loadDemoData() {
 		log.Println("  2024-04 — Bob and David move to CoolStartup...")
 
 		// Bob leaves TechCorp for CoolStartup
-		run("Bob leaves TechCorp", `MATCH (p:Person {name: "Bob"})-[r:WORKS_AT]->(:Company {name: "TechCorp"}) DELETE r`)
+		run("Bob leaves TechCorp", `MATCH (p:Person {name: "Bob"})-[r:WORKS_AT]->(:Company {name: "TechCorp"}) DELETE r AT TIME 1711929600`)
 		run("Bob@CoolStartup", `MATCH (p:Person {name: "Bob"}), (c:Company {name: "CoolStartup"}) CREATE (p)-[:WORKS_AT {title: "Design Lead"}]->(c) AT TIME 1711929600`)
 
 		// Alice-Bob friendship ends when Bob leaves
-		run("Alice-Bob unfriend", `MATCH (a:Person {name: "Alice"})-[r:FRIENDS_WITH]->(b:Person {name: "Bob"}) DELETE r`)
+		run("Alice-Bob unfriend", `MATCH (a:Person {name: "Alice"})-[r:FRIENDS_WITH]->(b:Person {name: "Bob"}) DELETE r AT TIME 1711929600`)
 
 		// David leaves TechCorp for CoolStartup
-		run("David leaves TechCorp", `MATCH (p:Person {name: "David"})-[r:WORKS_AT]->(:Company {name: "TechCorp"}) DELETE r`)
+		run("David leaves TechCorp", `MATCH (p:Person {name: "David"})-[r:WORKS_AT]->(:Company {name: "TechCorp"}) DELETE r AT TIME 1711929600`)
 		run("David@CoolStartup", `MATCH (p:Person {name: "David"}), (c:Company {name: "CoolStartup"}) CREATE (p)-[:WORKS_AT {title: "Lead DevOps"}]->(c) AT TIME 1711929600`)
 
 		// ---- Jul 2024: New projects, collaborations ----
@@ -182,17 +182,16 @@ func loadDemoData() {
 		log.Println("  2025-01 — Alice promoted to Staff, Eve joins TechCorp...")
 
 		// Alice -> Staff Engineer
-		run("Alice promo2 delete", `MATCH (p:Person {name: "Alice"})-[r:WORKS_AT]->(:Company {name: "TechCorp"}) DELETE r`)
+		run("Alice promo2 delete", `MATCH (p:Person {name: "Alice"})-[r:WORKS_AT]->(:Company {name: "TechCorp"}) DELETE r AT TIME 1736899200`)
 		run("Alice staff", `MATCH (p:Person {name: "Alice"}), (c:Company {name: "TechCorp"}) CREATE (p)-[:WORKS_AT {title: "Staff Engineer"}]->(c) AT TIME 1736899200`)
 		run("Alice role staff", `MATCH (p:Person {name: "Alice"}) SET p.role = "staff engineer"`)
 
-		// Eve leaves TechCorp, joins... wait she was already at TechCorp. Let me check.
-		// Eve was at TechCorp since Jun 2023. She moves to CoolStartup first? No — let's say Eve goes from TechCorp to Director role.
-		run("Eve promo delete", `MATCH (p:Person {name: "Eve"})-[r:WORKS_AT]->(:Company {name: "TechCorp"}) DELETE r`)
+		// Eve promoted to Director of Product
+		run("Eve promo delete", `MATCH (p:Person {name: "Eve"})-[r:WORKS_AT]->(:Company {name: "TechCorp"}) DELETE r AT TIME 1736985600`)
 		run("Eve director", `MATCH (p:Person {name: "Eve"}), (c:Company {name: "TechCorp"}) CREATE (p)-[:WORKS_AT {title: "Director of Product"}]->(c) AT TIME 1736985600`)
 
 		// Grace moves from CoolStartup to BigCo
-		run("Grace leaves CoolStartup", `MATCH (p:Person {name: "Grace"})-[r:WORKS_AT]->(:Company {name: "CoolStartup"}) DELETE r`)
+		run("Grace leaves CoolStartup", `MATCH (p:Person {name: "Grace"})-[r:WORKS_AT]->(:Company {name: "CoolStartup"}) DELETE r AT TIME 1736985600`)
 		run("Grace@BigCo", `MATCH (p:Person {name: "Grace"}), (c:Company {name: "BigCo"}) CREATE (p)-[:WORKS_AT {title: "VP of Design"}]->(c) AT TIME 1736985600`)
 
 		// New friendship

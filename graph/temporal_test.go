@@ -702,3 +702,139 @@ func TestCreateRelationshipAtTime(t *testing.T) {
 		}
 	}
 }
+
+// TestDeleteAtTime tests that DELETE with AT TIME uses a custom ValidTo timestamp
+func TestDeleteAtTime(t *testing.T) {
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
+
+	// Create a node at Jan 2023
+	createTS := int64(1672531200) // 2023-01-01
+	query, err := ParseQuery(`CREATE (p:Person {name: 'Alice'}) AT TIME 1672531200`)
+	if err != nil {
+		t.Fatalf("Failed to parse CREATE AT TIME: %v", err)
+	}
+	_, err = db.ExecuteQueryWithEmbedder(query, nil)
+	if err != nil {
+		t.Fatalf("Failed to create node: %v", err)
+	}
+
+	// Delete the node at Jun 2023
+	deleteTS := int64(1685577600) // 2023-06-01
+	query, err = ParseQuery(`MATCH (p:Person {name: 'Alice'}) DELETE p AT TIME 1685577600`)
+	if err != nil {
+		t.Fatalf("Failed to parse DELETE AT TIME: %v", err)
+	}
+	_, err = db.ExecuteQueryWithEmbedder(query, nil)
+	if err != nil {
+		t.Fatalf("Failed to delete node: %v", err)
+	}
+
+	// Verify the node has the correct ValidTo timestamp
+	nodes := db.GetNodesByLabel("Person")
+	// GetNodesByLabel returns active nodes only, so Alice should not appear
+	for _, n := range nodes {
+		if n.Properties["name"] == "Alice" {
+			if n.ValidTo == nil {
+				t.Fatal("Expected Alice to have ValidTo set")
+			}
+			expectedTo := time.Unix(deleteTS, 0)
+			if !n.ValidTo.Equal(expectedTo) {
+				t.Errorf("Expected ValidTo=%v, got %v", expectedTo, *n.ValidTo)
+			}
+		}
+	}
+
+	// Node should be visible at Feb 2023 (between create and delete)
+	query, err = ParseQuery(`MATCH (p:Person {name: 'Alice'}) AT TIME 1675209600 RETURN p.name`)
+	if err != nil {
+		t.Fatalf("Failed to parse: %v", err)
+	}
+	result, err := db.ExecuteQueryWithEmbedder(query, nil)
+	if err != nil {
+		t.Fatalf("Failed query: %v", err)
+	}
+	if len(result.Rows) != 1 {
+		t.Errorf("Expected Alice visible at Feb 2023, got %d rows", len(result.Rows))
+	}
+
+	// Node should NOT be visible at Jul 2023 (after delete)
+	query, err = ParseQuery(`MATCH (p:Person {name: 'Alice'}) AT TIME 1688169600 RETURN p.name`)
+	if err != nil {
+		t.Fatalf("Failed to parse: %v", err)
+	}
+	result, err = db.ExecuteQueryWithEmbedder(query, nil)
+	if err != nil {
+		t.Fatalf("Failed query: %v", err)
+	}
+	if len(result.Rows) != 0 {
+		t.Errorf("Expected Alice NOT visible at Jul 2023, got %d rows", len(result.Rows))
+	}
+
+	// Node should NOT be visible before creation (Dec 2022)
+	query, err = ParseQuery(`MATCH (p:Person {name: 'Alice'}) AT TIME 1671926400 RETURN p.name`)
+	if err != nil {
+		t.Fatalf("Failed to parse: %v", err)
+	}
+	result, err = db.ExecuteQueryWithEmbedder(query, nil)
+	if err != nil {
+		t.Fatalf("Failed query: %v", err)
+	}
+	if len(result.Rows) != 0 {
+		t.Errorf("Expected Alice NOT visible at Dec 2022, got %d rows", len(result.Rows))
+	}
+
+	_ = createTS // used in comments for clarity
+}
+
+// TestDeleteRelationshipAtTime tests that DELETE on relationships uses AT TIME
+func TestDeleteRelationshipAtTime(t *testing.T) {
+	db, cleanup := newTestGraph(t)
+	defer cleanup()
+
+	// Create two people and a relationship at Jan 2023
+	query, err := ParseQuery(`CREATE (a:Person {name: 'Alice'})-[:WORKS_AT]->(c:Company {name: 'TechCorp'}) AT TIME 1672531200`)
+	if err != nil {
+		t.Fatalf("Failed to parse: %v", err)
+	}
+	_, err = db.ExecuteQueryWithEmbedder(query, nil)
+	if err != nil {
+		t.Fatalf("Failed to create: %v", err)
+	}
+
+	// Delete the relationship at Jun 2023 (Alice leaves TechCorp)
+	query, err = ParseQuery(`MATCH (a:Person {name: 'Alice'})-[r:WORKS_AT]->(:Company {name: 'TechCorp'}) DELETE r AT TIME 1685577600`)
+	if err != nil {
+		t.Fatalf("Failed to parse DELETE AT TIME: %v", err)
+	}
+	_, err = db.ExecuteQueryWithEmbedder(query, nil)
+	if err != nil {
+		t.Fatalf("Failed to delete relationship: %v", err)
+	}
+
+	// Relationship should be visible at Feb 2023
+	query, err = ParseQuery(`MATCH (a:Person {name: 'Alice'})-[r:WORKS_AT]->(c:Company) AT TIME 1675209600 RETURN c.name`)
+	if err != nil {
+		t.Fatalf("Failed to parse: %v", err)
+	}
+	result, err := db.ExecuteQueryWithEmbedder(query, nil)
+	if err != nil {
+		t.Fatalf("Failed query: %v", err)
+	}
+	if len(result.Rows) != 1 {
+		t.Errorf("Expected WORKS_AT visible at Feb 2023, got %d rows", len(result.Rows))
+	}
+
+	// Relationship should NOT be visible at Jul 2023
+	query, err = ParseQuery(`MATCH (a:Person {name: 'Alice'})-[r:WORKS_AT]->(c:Company) AT TIME 1688169600 RETURN c.name`)
+	if err != nil {
+		t.Fatalf("Failed to parse: %v", err)
+	}
+	result, err = db.ExecuteQueryWithEmbedder(query, nil)
+	if err != nil {
+		t.Fatalf("Failed query: %v", err)
+	}
+	if len(result.Rows) != 0 {
+		t.Errorf("Expected WORKS_AT NOT visible at Jul 2023, got %d rows", len(result.Rows))
+	}
+}
