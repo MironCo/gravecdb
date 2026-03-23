@@ -1,4 +1,4 @@
-.PHONY: build build-linux build-all run server dev test demo-basic demo-temporal demo-persistence demo-pathfinding demo-query demo-temporal-paths demo-embeddings demo-client demo-performance web-dev web-build docker docker-run compose-up compose-down clean
+.PHONY: build build-linux build-all run server seed dev test demo-basic demo-temporal demo-persistence demo-pathfinding demo-query demo-temporal-paths demo-embeddings demo-client demo-performance web-dev web-build docker docker-run compose-up compose-down clean
 
 # Build the server binary for current platform
 build:
@@ -19,13 +19,18 @@ build-linux-arm:
 build-all: build build-linux build-linux-arm
 	@echo "Built binaries for all platforms"
 
-# Build and run the server
+# Build and run the server (auto-seeds demo data if DB is empty)
 run: build
+	@(sleep 1 && go run ./demo_data) &
 	@./gravecdb
 
-# Run the visualization server
-server:
-	@cd server && go run .
+# Run the server without seeding
+server: build
+	@./gravecdb
+
+# Seed demo data (requires server running on :8080)
+seed:
+	@go run ./demo_data
 
 # Run all tests (Go unit tests + Bolt integration tests if server is running)
 test:

@@ -79,6 +79,7 @@ type GraphQuery struct {
 	UnionAll        bool               // true for UNION ALL (keep duplicates)
 	Parameters      map[string]interface{} // query parameters ($name -> value)
 	CallClause      *GraphCallClause
+	LoadCSVClause   *GraphLoadCSVClause
 }
 
 // GraphPipelineStage is one MATCH+WHERE step in a WITH-chained query.
@@ -262,6 +263,13 @@ type GraphRemoveClause struct {
 	Items []GraphRemoveItem
 }
 
+type GraphLoadCSVClause struct {
+	FilePath        string
+	Variable        string
+	WithHeaders     bool
+	FieldTerminator string
+}
+
 // ConvertToGraphQuery converts the AST to graph-compatible query
 func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
 	// Handle UNION queries
@@ -403,6 +411,15 @@ func ConvertToGraphQuery(ast *Query) (*GraphQuery, error) {
 				Variable: c.Variable,
 				ListExpr: c.List,
 				Updates:  c.Updates,
+			}
+
+		case *LoadCSVClause:
+			gq.QueryType = "LOAD_CSV"
+			gq.LoadCSVClause = &GraphLoadCSVClause{
+				FilePath:        c.FilePath,
+				Variable:        c.Variable,
+				WithHeaders:     c.WithHeaders,
+				FieldTerminator: c.FieldTerminator,
 			}
 
 		case *CallClause:
@@ -931,6 +948,9 @@ func extractExprValue(expr Expression) interface{} {
 		return m
 	case *Identifier:
 		return e.Name
+	case *PropertyAccess:
+		// Preserve PropertyAccess for dynamic resolution (e.g. LOAD CSV row.field)
+		return e
 	case *UnaryExpression:
 		if e.Operator == "-" {
 			inner := extractExprValue(e.Operand)

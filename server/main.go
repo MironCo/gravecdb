@@ -57,13 +57,11 @@ func main() {
 	fmt.Printf("Data directory: %s\n", serverConfig.DataDir)
 	fmt.Printf("Server address: %s\n", serverConfig.Address())
 
-	// Load some demo data (only if database is empty)
-	if len(db.GetNodesByLabel("Person")) == 0 {
-		loadDemoData()
-	}
-
 	// Create Gin router
-	r := gin.Default()
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(gin.Logger(), gin.Recovery())
+	r.SetTrustedProxies(nil)
 
 	// Enable CORS - allow all origins (auth is the security layer, not CORS)
 	allowOrigins := serverConfig.AllowOrigins

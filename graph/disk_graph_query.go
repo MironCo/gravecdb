@@ -1,9 +1,12 @@
 package graph
 
 import (
+	"encoding/csv"
 	"fmt"
 	"math"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +35,8 @@ func (g *DiskGraph) ExecuteQueryWithEmbedder(query *Query, embedder Embedder) (*
 		return g.executeUnionQuery(query, embedder)
 	case "PIPELINE":
 		return g.executePipelineQuery(query, embedder)
+	case "LOAD_CSV":
+		return g.executeLoadCSVQuery(query)
 	case "UNWIND":
 		return g.executeUnwindQuery(query)
 	case "MERGE":
@@ -308,6 +313,173 @@ func (g *DiskGraph) executeUnwindQuery(query *Query) (*QueryResult, error) {
 		matches = g.filterMatchesUnlocked(matches, query.WhereClause)
 	}
 	return buildResult(matches, query.ReturnClause), nil
+}
+
+// executeLoadCSVQuery handles LOAD CSV FROM 'file' AS row CREATE/SET/...
+func (g *DiskGraph) executeLoadCSVQuery(query *Query) (*QueryResult, error) {
+	lc := query.LoadCSVClause
+	if lc == nil {
+		return nil, fmt.Errorf("LOAD CSV clause is nil")
+	}
+
+	// Open and parse the CSV file
+	f, err := os.Open(lc.FilePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open CSV file: %w", err)
+	}
+	defer f.Close()
+
+	reader := csv.NewReader(f)
+	if lc.FieldTerminator != "" && len(lc.FieldTerminator) == 1 {
+		reader.Comma = rune(lc.FieldTerminator[0])
+	}
+
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read CSV: %w", err)
+	}
+
+	if len(records) == 0 {
+		return &QueryResult{Columns: []string{"loaded"}, Rows: []map[string]interface{}{{"loaded": 0}}}, nil
+	}
+
+	// Build row data: WITH HEADERS uses first row as keys, otherwise indexed access
+	var headers []string
+	startRow := 0
+	if lc.WithHeaders {
+		headers = records[0]
+		startRow = 1
+	}
+
+	// Execute subsequent clauses for each row
+	totalCreated := 0
+	for i := startRow; i < len(records); i++ {
+		record := records[i]
+
+		// Build the row variable value
+		var rowVal interface{}
+		if lc.WithHeaders {
+			rowMap := make(map[string]interface{})
+			for j, header := range headers {
+				if j < len(record) {
+					rowMap[header] = autoConvert(record[j])
+				}
+			}
+			rowVal = rowMap
+		} else {
+			rowList := make([]interface{}, len(record))
+			for j, val := range record {
+				rowList[j] = autoConvert(val)
+			}
+			rowVal = rowList
+		}
+
+		if query.CreateClause != nil {
+			// Deep-copy the create clause so each row gets fresh properties
+			rowCC := copyCreateClause(query.CreateClause)
+			for idx := range rowCC.Nodes {
+				resolveRowReferences(rowCC.Nodes[idx].Properties, lc.Variable, rowVal)
+			}
+			for idx := range rowCC.Relationships {
+				resolveRowReferences(rowCC.Relationships[idx].Properties, lc.Variable, rowVal)
+			}
+
+			rowQuery := &Query{
+				QueryType:    "CREATE",
+				CreateClause: rowCC,
+				TimeClause:   query.TimeClause,
+			}
+			_, err := g.executeCreateQuery(rowQuery)
+			if err != nil {
+				return nil, fmt.Errorf("row %d: %w", i+1, err)
+			}
+			totalCreated++
+		}
+	}
+
+	return &QueryResult{
+		Columns: []string{"loaded"},
+		Rows:    []map[string]interface{}{{"loaded": totalCreated}},
+	}, nil
+}
+
+// copyCreateClause makes a deep copy of a GraphCreateClause so row resolution doesn't mutate the original
+func copyCreateClause(cc *cypher.GraphCreateClause) *cypher.GraphCreateClause {
+	clone := &cypher.GraphCreateClause{
+		Nodes:         make([]cypher.GraphCreateNode, len(cc.Nodes)),
+		Relationships: make([]cypher.GraphCreateRelationship, len(cc.Relationships)),
+	}
+	for i, n := range cc.Nodes {
+		clone.Nodes[i] = cypher.GraphCreateNode{
+			Variable: n.Variable,
+			Labels:   n.Labels,
+			Properties: copyProps(n.Properties),
+		}
+	}
+	for i, r := range cc.Relationships {
+		clone.Relationships[i] = cypher.GraphCreateRelationship{
+			Variable:   r.Variable,
+			Type:       r.Type,
+			FromVar:    r.FromVar,
+			ToVar:      r.ToVar,
+			Properties: copyProps(r.Properties),
+		}
+	}
+	return clone
+}
+
+func copyProps(props map[string]interface{}) map[string]interface{} {
+	m := make(map[string]interface{}, len(props))
+	for k, v := range props {
+		m[k] = v
+	}
+	return m
+}
+
+// autoConvert attempts to convert a CSV string value to a numeric type if possible
+func autoConvert(s string) interface{} {
+	if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return i
+	}
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return f
+	}
+	if s == "true" {
+		return true
+	}
+	if s == "false" {
+		return false
+	}
+	return s
+}
+
+// resolveRowReferences replaces row.field references in property maps with actual values
+func resolveRowReferences(props map[string]interface{}, rowVar string, rowVal interface{}) {
+	for key, val := range props {
+		if strVal, ok := val.(string); ok {
+			// Check for row.field reference pattern
+			if strings.HasPrefix(strVal, rowVar+".") {
+				field := strVal[len(rowVar)+1:]
+				if rowMap, ok := rowVal.(map[string]interface{}); ok {
+					if resolved, exists := rowMap[field]; exists {
+						props[key] = resolved
+					}
+				}
+			} else if strVal == rowVar {
+				props[key] = rowVal
+			}
+		}
+		// Handle cypher.PropertyAccess expressions stored during parsing
+		if pa, ok := val.(*cypher.PropertyAccess); ok {
+			if ident, ok := pa.Object.(*cypher.Identifier); ok && ident.Name == rowVar {
+				if rowMap, ok := rowVal.(map[string]interface{}); ok {
+					if resolved, exists := rowMap[pa.Property]; exists {
+						props[key] = resolved
+					}
+				}
+			}
+		}
+	}
 }
 
 // executeUnionQuery runs each sub-query and combines the results.

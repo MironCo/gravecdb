@@ -175,6 +175,8 @@ func (p *Parser) parseClause() Clause {
 		return p.parseSimilarToClause()
 	case TOKEN_CALL:
 		return p.parseCallClause()
+	case TOKEN_LOAD:
+		return p.parseLoadCSVClause()
 	default:
 		p.addError("unexpected token: %s", p.curToken.Literal)
 		p.nextToken()
@@ -489,6 +491,70 @@ func (p *Parser) parseUnwindClause() *UnwindClause {
 	}
 	clause.Variable = p.curToken.Literal
 	p.nextToken()
+
+	return clause
+}
+
+// parseLoadCSVClause parses LOAD CSV [WITH HEADERS] FROM 'file' AS row [FIELDTERMINATOR 'sep']
+func (p *Parser) parseLoadCSVClause() *LoadCSVClause {
+	clause := &LoadCSVClause{FieldTerminator: ","}
+	p.nextToken() // consume LOAD
+
+	if !p.curTokenIs(TOKEN_CSV) {
+		p.addError("expected CSV after LOAD")
+		return nil
+	}
+	p.nextToken() // consume CSV
+
+	// Optional WITH HEADERS
+	if p.curTokenIs(TOKEN_WITH) {
+		p.nextToken() // consume WITH
+		if !p.curTokenIs(TOKEN_HEADERS) {
+			p.addError("expected HEADERS after WITH in LOAD CSV")
+			return nil
+		}
+		clause.WithHeaders = true
+		p.nextToken() // consume HEADERS
+	}
+
+	if !p.curTokenIs(TOKEN_FROM) {
+		p.addError("expected FROM in LOAD CSV")
+		return nil
+	}
+	p.nextToken() // consume FROM
+
+	// Parse file path (string literal)
+	if !p.curTokenIs(TOKEN_STRING) {
+		p.addError("expected file path string after FROM")
+		return nil
+	}
+	clause.FilePath = p.curToken.Literal
+	p.nextToken()
+
+	// Expect AS variable
+	if !p.curTokenIs(TOKEN_AS) {
+		p.addError("expected AS in LOAD CSV")
+		return nil
+	}
+	p.nextToken() // consume AS
+
+	if p.curToken.Literal == "" || p.curTokenIs(TOKEN_EOF) {
+		p.addError("expected variable name after AS")
+		return nil
+	}
+	clause.Variable = p.curToken.Literal
+	p.nextToken()
+
+	// Optional FIELDTERMINATOR
+	if p.curTokenIs(TOKEN_FIELDTERMINATOR) {
+		p.nextToken() // consume FIELDTERMINATOR
+		if !p.curTokenIs(TOKEN_STRING) {
+			p.addError("expected string after FIELDTERMINATOR")
+			return nil
+		}
+		clause.FieldTerminator = p.curToken.Literal
+		p.nextToken()
+	}
 
 	return clause
 }

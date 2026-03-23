@@ -189,6 +189,17 @@ func (f *ForeachClause) clause() {}
 // Custom Extension Clauses
 // ============================================================================
 
+// LoadCSVClause represents LOAD CSV FROM 'file' AS row
+type LoadCSVClause struct {
+	FilePath        string // path to CSV file
+	Variable        string // row variable name (AS ...)
+	WithHeaders     bool   // WITH HEADERS modifier
+	FieldTerminator string // custom field delimiter (default: ",")
+}
+
+func (l *LoadCSVClause) node()   {}
+func (l *LoadCSVClause) clause() {}
+
 // TimeClause represents AT TIME clause (custom extension)
 type TimeClause struct {
 	Mode      string     // "EARLIEST" or "TIMESTAMP"
